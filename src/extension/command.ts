@@ -1,6 +1,6 @@
 /**
  * `/onward <动作> [参数]`：动作在前，参数写成 `字段=值`，字段名和设置文件一样。`set` 全有或全无：任何一项
- * 不合法就一项都不写。
+ * 不合法就一项都不写。不写动作时弹出菜单，标题是现在的状态。
  *
  * `--help` 是结束：写在哪都只显示帮助、不执行，跟在动作后面时显示这个动作的帮助。补全在每个动作后面都给它，
  * 写了它之后什么都不再给，后面有没有空格都一样。
@@ -18,12 +18,16 @@ import {
 	type Notice,
 	rulesNotice,
 	say,
+	section,
 	showNotice,
+	statusHeadline,
 	statusNotice,
+	table,
 } from "./text.ts";
 
-/** `topic`：帮助或出错是关于哪个动作的，没有时是总帮助。 */
+/** `topic`：帮助或出错是关于哪个动作的，没有时是总帮助。`choose`：没写动作，弹菜单。 */
 export type Command =
+	| { kind: "choose" }
 	| { kind: "status" | "reload" | "reset" }
 	| { kind: "help"; topic?: string }
 	| { kind: "show"; rules: boolean }
@@ -50,10 +54,10 @@ const ACTIONS: readonly ActionSpec[] = [
 	{
 		name: "status",
 		args: "",
-		description: "开关、设置文件、恢复前续跑了几次",
+		description: "现在会不会续跑、规则没写的参数、设置文件",
 		details: [
-			`/${COMMAND} 不写动作时就是 status`,
-			"开着时还说有几条规则生效、规则没写的参数用什么",
+			"第一行说现在会不会续跑；正在续跑时下一行是进度",
+			"下面是规则没写的参数（做法、上限、间隔）和设置文件在哪",
 			`设置文件有问题时只说有几处，详情用 /${COMMAND} show`,
 		],
 	},
@@ -116,14 +120,21 @@ const ACTIONS: readonly ActionSpec[] = [
 	},
 ];
 
-const DESCRIPTION = `出错后按规则自动续跑：/${COMMAND} [${ACTIONS.map((item) => item.name).join("|")}] [${HELP}]`;
+const DESCRIPTION = `出错后按规则自动续跑（不写动作时弹出菜单，${HELP} 查看用法）`;
 
 export function registerCommand(pi: ExtensionAPI, settings: Settings, onward: Onward): void {
 	pi.registerCommand(COMMAND, {
 		description: DESCRIPTION,
 		getArgumentCompletions: (prefix) => completeArguments(prefix),
 		handler: async (args, ctx) => {
-			const notice = execute(parseCommand(args), settings, onward, ctx);
+			let command = parseCommand(args);
+			if (command.kind === "choose") {
+				const picked = await choose(ctx, settings);
+				if (picked === undefined) return;
+				command = parseCommand(picked);
+			}
+			if (command.kind === "choose") return;
+			const notice = execute(command, settings, onward, ctx);
 			// 不管是命令关的、还是 reload 读到手改的关或有问题的设置，不生效了就不该还有等着的续跑。
 			if (!isActive(settings.config)) onward.stop(ctx);
 			say(ctx, notice);
@@ -131,7 +142,45 @@ export function registerCommand(pi: ExtensionAPI, settings: Settings, onward: On
 	});
 }
 
-function execute(command: Command, settings: Settings, onward: Onward, ctx: ExtensionContext): Notice {
+/**
+ * `/onward` 不写动作：弹出菜单，标题是现在的状态。返回选中的动作；要写参数的（set、unset）填进输入框接着写，
+ * 返回 undefined。没有界面时不弹，什么都不做。
+ */
+async function choose(ctx: ExtensionContext, settings: Settings): Promise<string | undefined> {
+	if (!ctx.hasUI) return undefined;
+	const items = menuItems();
+	const label = await ctx.ui.select(
+		statusHeadline(settings),
+		items.map((item) => item.label),
+	);
+	const picked = items.find((item) => item.label === label);
+	if (!picked?.fill) return picked?.input;
+	ctx.ui.setEditorText(`/${COMMAND} ${picked.input} `);
+	return undefined;
+}
+
+/** 每个动作一项，最后是 --help；和帮助里的动作表同一个写法。`fill`：参数非写不可。 */
+export function menuItems(): { label: string; input: string; fill: boolean }[] {
+	const labels = table(
+		[...ACTIONS.map((item): [string, string] => [usage(item), item.description]), [HELP, "显示帮助"]],
+		0,
+	);
+	return [
+		...ACTIONS.map((item, index) => ({
+			label: labels[index]!,
+			input: item.name,
+			fill: item.args !== "" && !item.args.startsWith("["),
+		})),
+		{ label: labels.at(-1)!, input: HELP, fill: false },
+	];
+}
+
+function execute(
+	command: Exclude<Command, { kind: "choose" }>,
+	settings: Settings,
+	onward: Onward,
+	ctx: ExtensionContext,
+): Notice {
 	switch (command.kind) {
 		case "status":
 			return statusNotice(settings, onward.progress());
@@ -140,7 +189,7 @@ function execute(command: Command, settings: Settings, onward: Onward, ctx: Exte
 		case "error":
 			return commandErrorNotice(command.message, command.topic);
 		case "show":
-			return command.rules ? rulesNotice(settings.config) : showNotice(settings);
+			return command.rules ? rulesNotice(settings) : showNotice(settings);
 		case "reload":
 			settings.reload();
 			return statusNotice(settings, onward.progress());
@@ -152,7 +201,7 @@ function execute(command: Command, settings: Settings, onward: Onward, ctx: Exte
 				saved,
 				settings,
 				onward.progress(),
-				kept ? "（已恢复默认，手写的 rules 保留）" : "（已恢复默认）",
+				kept ? "已恢复默认，手写的 rules 保留" : "已恢复默认",
 			);
 		}
 		case "update":
@@ -170,7 +219,7 @@ export function parseCommand(text: string): Command {
 		return spec ? { kind: "help", topic: spec.name } : unknownAction(first);
 	}
 	const [first, ...rest] = tokens;
-	if (first === undefined) return { kind: "status" };
+	if (first === undefined) return { kind: "choose" };
 	const action = first.toLowerCase();
 	switch (action) {
 		case "status":
@@ -281,7 +330,7 @@ function overallHelp(): string {
 		`用法：/${COMMAND} [动作] [参数] [${HELP}]`,
 		...section("动作", table(ACTIONS.map((item) => [usage(item), item.description]))),
 		"",
-		"  不写动作时就是 status",
+		"  不写动作时弹出菜单，标题是现在的状态",
 		`  每个动作的用法：/${COMMAND} <动作> ${HELP}（只显示帮助，不执行）`,
 		`  字段和默认值：/${COMMAND} set ${HELP}`,
 	].join("\n");
@@ -307,11 +356,6 @@ function usage(spec: ActionSpec): string {
 	return spec.args ? `${spec.name} ${spec.args}` : spec.name;
 }
 
-/** 有内容才出这一节，前面空一行。 */
-function section(title: string, lines: string[]): string[] {
-	return lines.length ? ["", title, ...lines] : [];
-}
-
 /** 作用一行，写法和默认值一行；有固定取值的逐个列出，标出默认的那个。 */
 function fieldHelp(item: Field): string {
 	const fallback = DEFAULT_POLICY[item.name];
@@ -321,27 +365,6 @@ function fieldHelp(item: Field): string {
 			)
 		: [`${item.syntax}；默认：${item.show(fallback)}`];
 	return [item.description, ...values].join("\n");
-}
-
-/** 名字一列、说明一列，按终端里的宽度对齐；说明的后几行对齐在第一行下面。 */
-function table(rows: [name: string, text: string][]): string[] {
-	const width = Math.max(0, ...rows.map(([name]) => cells(name)));
-	return rows.flatMap(([name, text]) => {
-		const [first, ...more] = text.split("\n");
-		return [
-			`  ${name}${" ".repeat(width - cells(name))}  ${first}`,
-			...more.map((line) => `  ${" ".repeat(width)}  ${line}`),
-		];
-	});
-}
-
-/** 终端里占几格：中文和全角字符占两格。 */
-function cells(text: string): number {
-	return [...text].reduce(
-		(sum, char) =>
-			sum + (/[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\uff00-\uff60\uffe0-\uffe6]/.test(char) ? 2 : 1),
-		0,
-	);
 }
 
 // ── 分词 ──

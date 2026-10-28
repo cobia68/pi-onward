@@ -3,7 +3,7 @@
  *
  * - `policy/`：纯逻辑，不碰 pi 的运行时和文件。什么算失败、命中哪条规则、按什么参数、等多久、什么时候停。
  * - `extension/`：接 pi。`onward` 处理事件并续跑，`command` 是 `/onward`，`autocomplete` 让它的参数里按 Tab 补参数，
- *   `settings` 读写设置文件，`text` 是给人看的文字，`install` 把它们装起来。
+ *   `settings` 读写设置文件，`text` 是给人看的文字，`render` 画会话里的续跑消息，`install` 把它们装起来。
  *
  * 这里是 pi 加载的入口，只决定设置文件的位置。目录用 pi 自己的 getAgentDir()，`PI_CODING_AGENT_DIR` 的写法
  * （包括 `~`）和 pi 一致。

@@ -13,7 +13,7 @@ test("边界上省略失败消息并要求重发，不追加消息", async () =>
 		entries: [{ type: "context_edit", targetId: "abc123", replacement: null }],
 		continue: true,
 	});
-	assert.match(h.notes.at(-1)![1], /静默重发（第 1\/10 次）/);
+	assert.match(h.notes.at(-1)![1], /^onward：0 毫秒后静默重发$/);
 });
 
 test("保留其他扩展已经提出的条目", async () => {
@@ -48,7 +48,7 @@ test("静默重发成功后再出错：次数和同错计数都从头算", async
 	assert.ok((await h.boundary(err(), "b"))?.continue);
 	await h.emit("message_end", { message: tool() });
 	assert.ok((await h.boundary(err(), "c"))?.continue, "不该撞上次数或同错上限");
-	assert.match(h.notes.at(-1)![1], /（第 1\/2 次）$/);
+	assert.equal(h.status(), "⏩ 续跑 1/2 · any", "次数从头算");
 	assert.deepEqual(h.warnings(), []);
 });
 

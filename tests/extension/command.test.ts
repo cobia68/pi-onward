@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { completeArguments, helpText, parseCommand } from "../../src/extension/command.ts";
+import { completeArguments, helpText, menuItems, parseCommand } from "../../src/extension/command.ts";
+import { cells } from "../../src/extension/text.ts";
 import { harness } from "../support/fake-pi.ts";
 
 const values = (prefix: string) => completeArguments(prefix)?.map((item) => item.value);
 const ACTIONS = ["status", "on", "off", "show", "set", "unset", "reload", "reset"];
 
-test("动作在前：status 是默认", () => {
-	assert.deepEqual(parseCommand(""), { kind: "status" });
+test("动作在前；不写动作时弹菜单", () => {
+	assert.deepEqual(parseCommand(""), { kind: "choose" });
+	assert.deepEqual(parseCommand("   "), { kind: "choose" });
 	assert.deepEqual(parseCommand(" status "), { kind: "status" });
 	assert.deepEqual(parseCommand("show"), { kind: "show", rules: false });
 	assert.deepEqual(parseCommand("show rules"), { kind: "show", rules: true });
@@ -40,6 +42,7 @@ test("总帮助列出每个动作，字段留给 set --help", () => {
 	for (const action of ACTIONS) assert.match(overall, new RegExp(`^ {2}${action}\\b`, "m"), action);
 	assert.match(overall, /\/onward <动作> --help（只显示帮助，不执行）/);
 	assert.match(overall, /字段和默认值：\/onward set --help/);
+	assert.match(overall, /不写动作时弹出菜单/);
 	assert.doesNotMatch(overall, /maxSameError/);
 });
 
@@ -66,11 +69,60 @@ test("每个动作有自己的帮助：用法、说明；set、unset 列出字�
 
 test("--help 不执行：不改设置", async () => {
 	const h = harness();
-	const before = await h.command("");
+	const before = await h.command("status");
 	assert.equal(await h.command("set maxRetries=5 --help"), helpText("set"));
 	assert.equal(await h.command("off --help"), helpText("off"));
 	assert.equal(await h.command("--help"), helpText());
-	assert.equal(await h.command(""), before, "没有改");
+	assert.equal(await h.command("status"), before, "没有改");
+});
+
+test("/onward 不写动作：弹菜单，标题是现在的状态；取消就什么都不做", async () => {
+	const h = harness({ config: { rules: [{ name: "any" }] } });
+	assert.equal(await h.command(""), "", "没有回复");
+	assert.equal(h.menus.length, 1);
+	const [menu] = h.menus;
+	assert.equal(menu!.title, "⏩ onward：开，1 条规则生效");
+	assert.deepEqual(
+		menu!.options.map((label) => label.split(/\s+/)[0]),
+		[...ACTIONS, "--help"],
+	);
+	// 说明对齐在同一列：按终端里的宽度量，中文占两格。
+	const column = (label: string) => cells(label.slice(0, label.search(/\s{2}\S/)));
+	assert.equal(new Set(menu!.options.map(column)).size, 1);
+	assert.equal(h.editorText, undefined);
+});
+
+test("菜单：选了就执行；set、unset 填进输入框接着写参数", async () => {
+	const label = (action: string) => menuItems().find((item) => item.input === action)!.label;
+	const h = harness({ config: { rules: [{ name: "any" }] } });
+	h.pick = () => label("off");
+	assert.match(await h.command(""), /^💤 onward：关/);
+	h.pick = () => label("status");
+	assert.match(await h.command(""), /^💤 onward：关/);
+	h.pick = () => label("--help");
+	assert.equal(await h.command(""), helpText());
+	const notes = h.notes.length;
+	h.pick = () => label("set");
+	await h.command("");
+	assert.equal(h.editorText, "/onward set ");
+	assert.equal(h.notes.length, notes, "只填进输入框，不执行");
+	h.pick = () => label("unset");
+	await h.command("");
+	assert.equal(h.editorText, "/onward unset ");
+	assert.deepEqual(
+		menuItems()
+			.filter((item) => item.fill)
+			.map((item) => item.input),
+		["set", "unset"],
+		"show [rules] 的参数可以不写，选了就执行",
+	);
+});
+
+test("没有界面时 /onward 不弹菜单，也不执行任何动作", async () => {
+	const h = harness({ ui: false });
+	await h.command("");
+	assert.deepEqual(h.menus, []);
+	assert.deepEqual(h.notes, []);
 });
 
 test("出错时指到这个动作的帮助", async () => {

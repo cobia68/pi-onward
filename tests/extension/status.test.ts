@@ -21,7 +21,7 @@ test("次数用完：写续跑已停，这一轮结束也留着，用户发新�
 	const h = harness(fast({ maxRetries: 1 }));
 	await h.boundary(err());
 	await h.boundary(err("502 upstream"));
-	assert.equal(h.status(), "⏩ 续跑已停 · any");
+	assert.equal(h.status(), "🛑 续跑已停 · any");
 	await h.emit("agent_start");
 	assert.equal(h.status(), undefined);
 });
@@ -29,7 +29,7 @@ test("次数用完：写续跑已停，这一轮结束也留着，用户发新�
 test("action=stop 的规则：写不续跑", async () => {
 	const h = harness(fast({}, [{ name: "quota", when: { error: "quota" }, action: "stop" }]));
 	await h.boundary(err("429 insufficient_quota"));
-	assert.equal(h.status(), "⏩ 不续跑 · quota");
+	assert.equal(h.status(), "🛑 不续跑 · quota");
 });
 
 test("没有接着跑：按 Esc 打断等待、关掉，都清掉", async () => {
@@ -54,4 +54,15 @@ test("没有界面时不写状态栏；没续跑过也不去清", async () => {
 	await idle.emit("agent_start");
 	await idle.emit("message_end", { message: ok() });
 	assert.equal(idle.statusWrites, 0);
+});
+
+test("会话里的提示不重复状态栏：不带图标、次数和规则名，只说接下来做什么、为什么停", async () => {
+	const h = harness(fast({ maxRetries: 1 }, [{ name: "auth" }]));
+	await h.boundary(err());
+	assert.equal(h.status(), "⏩ 续跑 1/1 · auth");
+	assert.equal(h.notes.at(-1)![1], "onward：0 毫秒后发「继续」");
+	await h.boundary(err("502 upstream"));
+	assert.equal(h.status(), "🛑 续跑已停 · auth");
+	assert.equal(h.warnings()[0], "onward：已续跑 1 次仍未恢复；发任意消息重新计数");
+	for (const [, message] of h.notes) assert.doesNotMatch(message, /⏩|🛑|auth|\d+\/\d+/, message);
 });

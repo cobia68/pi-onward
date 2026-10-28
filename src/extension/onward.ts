@@ -24,10 +24,20 @@ type Ctx = Pick<ExtensionContext, "sessionManager" | "hasUI" | "ui">;
 /** 状态栏里本扩展的那一格。 */
 const STATUS_KEY = "pi-onward";
 
+/** 续跑消息的类型，render.ts 按它画。 */
+export const CUSTOM_TYPE = "pi-onward";
+
+/** 续跑消息带的 details：只给界面画标签，模型只读到 content。 */
+export interface ContinueDetails {
+	rule: string;
+	attempt: number;
+	max: number;
+}
+
 /** 怎么接着跑：resend 省略失败的那条重发，message 追加一条文字消息。 */
 export type Continue =
 	| Extract<SessionBoundaryDraft, { type: "context_edit" }>
-	| (Extract<SessionBoundaryDraft, { type: "custom_message" }> & { content: string });
+	| (Extract<SessionBoundaryDraft, { type: "custom_message" }> & { content: string; details: ContinueDetails });
 
 /**
  * 每个会话由哪个实例负责。同一个会话装了两份（例如 subagent 既按包加载、又按路径加载了一份副本），
@@ -86,8 +96,14 @@ export class Onward {
 		const draft: Continue =
 			hit.policy.action === "resend"
 				? { type: "context_edit", targetId: entry.sourceEntry.id, replacement: null }
-				: { type: "custom_message", customType: "pi-onward", content: this.prompt(hit, step), display: true };
-		say(ctx, retryNotice(hit, step, draft));
+				: {
+						type: "custom_message",
+						customType: CUSTOM_TYPE,
+						content: this.prompt(hit, step),
+						display: true,
+						details: { rule: hit.rule.name, attempt: step.attempt, max: hit.policy.maxRetries },
+					};
+		say(ctx, retryNotice(step, draft));
 		this.setStatus(ctx, "retrying", retryStatus(hit, step));
 		if (await this.wait(step.delay, ctx.signal)) return undefined;
 		// 等的时候用户发了消息：pi 会接着处理它，这算用户开的新一轮。
@@ -137,7 +153,7 @@ export class Onward {
 	private advance(hit: Hit, ctx: ExtensionContext): Retry | undefined {
 		const step = this.tracker.next(hit.rule.name, hit.failure, hit.policy);
 		if (step.retry) return step;
-		if (step.notify) say(ctx, giveUpNotice(hit, step));
+		if (step.notify) say(ctx, giveUpNotice(step));
 		this.setStatus(ctx, "gave-up", giveUpStatus(hit, step));
 		return undefined;
 	}
@@ -148,7 +164,7 @@ export class Onward {
 		if (this.statusBar !== undefined) this.setStatus(ctx, undefined);
 	}
 
-	/** 没有界面（`pi -p`、RPC）时不写。 */
+	/** 没有界面时（`pi -p`）不写；RPC 下 pi 把它发给客户端。 */
 	private setStatus(ctx: Ctx, status: "retrying" | "gave-up" | undefined, text?: string): void {
 		this.statusBar = status;
 		if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, text);

@@ -13,10 +13,19 @@ test("在收尾边界上追加一条看得见的消息并要求继续", async ()
 	const prior = { type: "custom", customType: "x" };
 	const result = await h.emit("agent_before_settle", boundaryEvent(err(), "e1", { entries: [prior] }));
 	assert.deepEqual(result, {
-		entries: [prior, { type: "custom_message", customType: "pi-onward", content: "继续", display: true }],
+		entries: [
+			prior,
+			{
+				type: "custom_message",
+				customType: "pi-onward",
+				content: "继续",
+				display: true,
+				details: { rule: "any", attempt: 1, max: 10 },
+			},
+		],
 		continue: true,
 	});
-	assert.match(h.notes.at(-1)![1], /0 毫秒后发「继续」（第 1\/10 次）$/);
+	assert.match(h.notes.at(-1)![1], /^onward：0 毫秒后发「继续」$/);
 });
 
 test("默认 10 次；同一个错误连续第 11 次才彻底停，只提醒一次", async () => {
@@ -54,7 +63,7 @@ test("续跑成功后再出错：次数从头算", async () => {
 	await h.boundary(err());
 	assert.equal(h.sent.length, 3);
 	assert.deepEqual(h.warnings(), []);
-	assert.match(h.notes.at(-1)![1], /（第 1\/2 次）$/);
+	assert.equal(h.status(), "⏩ 续跑 1/2 · any", "次数从头算");
 });
 
 test("用户自己开新一轮：额度清零", async () => {
@@ -72,7 +81,7 @@ test("间隔真的等够，提示词模板生效", async () => {
 	await h.boundary(err());
 	assert.ok(Date.now() - started >= 30);
 	assert.deepEqual(h.sent, ["第 1/10 次：401 invalid api key"]);
-	assert.match(h.notes.at(-1)![1], /40 毫秒后发「第 1\/10 次：401 invalid api key」（第 1\/10 次）/);
+	assert.match(h.notes.at(-1)![1], /^onward：40 毫秒后发「第 1\/10 次：401 invalid api key」$/);
 });
 
 test("等的时候：按 Esc、用户发了消息、关掉，都不续跑", async () => {
@@ -121,8 +130,8 @@ test("规则：没命中的错误不处理；各规则的提示词与次数", as
 	await h.boundary(err("429 rate limited"));
 	await h.boundary(err("401 Invalid API key"));
 	assert.deepEqual(h.sent, ["鉴权抖了，接着干", "继续"]);
-	assert.match(h.warnings()[0], /^onward：规则 auth：已续跑 1 次仍未恢复/);
-	assert.match(h.notes.find(([, m]) => m.includes("鉴权"))![1], /^onward：规则 auth：上游错误/);
+	assert.match(h.warnings()[0], /^onward：已续跑 1 次仍未恢复；发任意消息重新计数$/);
+	assert.match(h.notes.find(([, m]) => m.includes("鉴权"))![1], /^onward：0 毫秒后发「鉴权抖了，接着干」$/);
 });
 
 test("规则按 provider 匹配", async () => {
@@ -135,10 +144,10 @@ test("规则按 provider 匹配", async () => {
 test("没有内置规则：没写 rules 或全部写坏都不续跑，启动时提醒", async () => {
 	const none = harness({ config: { delay: "0s" } });
 	await none.emit("session_start", { reason: "startup" });
-	assert.match(none.notes.at(-1)![1], /^onward：没有可用的规则，出错时不会自动续跑/);
+	assert.match(none.notes.at(-1)![1], /^💤 onward：没有可用的规则，出错时不会自动续跑/);
 	assert.equal(none.notes.at(-1)![0], "info");
 	assert.equal(await none.boundary(err()), undefined);
-	assert.match(await none.command(""), /^onward：开，没有可用的规则/);
+	assert.match(await none.command("status"), /^💤 onward：开，但没有可用的规则/);
 
 	// 只想处理 401，但 when 的键拼错了：整份设置不生效，也不会退回「任何错误都续跑」。
 	const typo = harness({
@@ -165,7 +174,7 @@ test("action=stop 的规则：命中就停、只提醒，不会落到后面的�
 		},
 	});
 	assert.equal(await h.boundary(err("429 insufficient_quota")), undefined);
-	assert.match(h.warnings()[0], /^onward：规则 quota：429 insufficient_quota，按规则不续跑$/);
+	assert.match(h.warnings()[0], /^onward：这条规则只提醒，需要你自己处理$/);
 	await h.emit("agent_start");
 	await h.boundary(err("502 upstream"));
 	assert.deepEqual(h.sent, ["继续"]);

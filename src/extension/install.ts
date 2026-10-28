@@ -2,7 +2,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { argumentTabCompletion } from "./autocomplete.ts";
 import { registerCommand } from "./command.ts";
-import { Onward } from "./onward.ts";
+import { CUSTOM_TYPE, Onward } from "./onward.ts";
+import { renderContinue } from "./render.ts";
 import { Settings } from "./settings.ts";
 import { say, startupNotices } from "./text.ts";
 
@@ -22,4 +23,5 @@ export function install(pi: ExtensionAPI, configPath: string): void {
 	pi.on("session_shutdown", (_event, ctx) => onward.shutdown(ctx));
 
 	registerCommand(pi, settings, onward);
+	pi.registerMessageRenderer(CUSTOM_TYPE, renderContinue);
 }

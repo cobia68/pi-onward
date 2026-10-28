@@ -21,7 +21,7 @@ async function load() {
 	const command = extension.commands.get("onward");
 	assert.ok(command, "the onward command is registered");
 	let text = "";
-	await command.handler("", { hasUI: true, ui: { notify: (message) => (text = message) } });
+	await command.handler("status", { hasUI: true, ui: { notify: (message) => (text = message) } });
 	return { extension, text };
 }
 
@@ -30,8 +30,9 @@ const agentDir = `.pi-onward-check-${process.pid}`;
 delete process.env.PI_ONWARD_CONFIG;
 process.env.PI_CODING_AGENT_DIR = `~/${agentDir}`;
 const { extension, text } = await load();
-assert.match(text, /^onward：开，没有可用的规则.*发「继续」，最多 10 次/);
-assert.ok(text.includes(`（${join(homedir(), agentDir, "onward.json")}）`), text);
+assert.match(text, /^💤 onward：开，但没有可用的规则[\s\S]*做法 {2}发「继续」\n {2}上限 {2}最多 10 次/);
+assert.ok(text.includes(`  ${join(homedir(), agentDir, "onward.json")}（还没有`), text);
+assert.ok(extension.messageRenderers.has("pi-onward"), "continue message renderer");
 for (const event of [
 	"agent_start",
 	"message_end",
@@ -45,6 +46,6 @@ for (const event of [
 // `PI_ONWARD_CONFIG` 优先。
 const override = join(tmpdir(), `pi-onward-check-${process.pid}.json`);
 process.env.PI_ONWARD_CONFIG = override;
-assert.ok((await load()).text.includes(`（${override}）`), "PI_ONWARD_CONFIG");
+assert.ok((await load()).text.includes(`  ${override}（还没有`), "PI_ONWARD_CONFIG");
 
-console.log("pi extension loaded: /onward, default status, lifecycle handlers, settings path");
+console.log("pi extension loaded: /onward status, lifecycle handlers, message renderer, settings path");

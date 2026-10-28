@@ -13,10 +13,10 @@ test("命令改了就存，重新加载还在", async () => {
 	assert.equal(read(h.configPath).maxRetries, 5);
 	if (process.platform !== "win32") assert.equal(statSync(h.configPath).mode & 0o777, 0o600);
 	const again = harness({ configPath: h.configPath });
-	assert.match(await again.command(""), /最多 5 次/);
+	assert.match(await again.command("status"), /最多 5 次/);
 	await h.command("off");
 	assert.equal(read(h.configPath).enabled, false);
-	assert.match(await h.command(""), /^onward：关/);
+	assert.match(await h.command("status"), /^💤 onward：关/);
 	await h.command("unset maxRetries");
 	assert.equal("maxRetries" in read(h.configPath), false);
 });
@@ -33,7 +33,7 @@ test("保存不动手写的 rules，也不覆盖加载后才手改的内容", as
 		note: "hand-edited",
 		rules,
 	});
-	assert.match(await h.command(""), /^onward：关/, "重新读到了手改的 enabled");
+	assert.match(await h.command("status"), /^🛑 onward：关；/, "重新读到了手改的 enabled（note 不认识，算一处问题）");
 });
 
 test("一项不合法就都不改", async () => {
@@ -45,7 +45,7 @@ test("一项不合法就都不改", async () => {
 test("reset 去掉开关和参数，保留手写的 rules", async () => {
 	const h = harness();
 	await h.command("set maxRetries=5");
-	assert.match(await h.command("reset"), /最多 10 次.*（已恢复默认）$/);
+	assert.match(await h.command("reset"), /^💤 onward：开.*\n已恢复默认\n[\s\S]*最多 10 次/);
 	assert.deepEqual(read(h.configPath), {});
 
 	const kept = harness({ config: { enabled: false, maxRetries: 3, rules: [{ name: "a" }] } });
@@ -59,7 +59,7 @@ test("坏 JSON：不续跑、拒绝写、提示", async () => {
 	await h.emit("session_start", { reason: "startup" });
 	assert.match(h.warnings()[0], /读不了：不是合法 JSON/);
 	assert.match(await h.command("set maxRetries=5"), /读不了（不是合法 JSON.*先修好；未做任何修改$/);
-	assert.doesNotMatch(await h.command(""), /最多 5 次/, "没有改");
+	assert.doesNotMatch(await h.command("status"), /最多 5 次/, "没有改");
 	assert.match(await h.command("reset"), /未做任何修改$/);
 	assert.equal(readFileSync(path, "utf8"), "{ not json", "原文件没被覆盖");
 	assert.equal(new Settings(path).reset().kind, "broken");
@@ -80,16 +80,16 @@ test("内容有问题：启动和状态都说清不会续跑；命令照常合�
 	const h = harness({ config: { enabled: "yes", rules: [{ name: "any" }] } });
 	await h.emit("session_start", { reason: "startup" });
 	assert.match(h.warnings()[0], /设置文件有 1 处问题，修好之前不会自动续跑/);
-	assert.match(await h.command(""), /^onward：开，但设置文件有 1 处问题/);
+	assert.match(await h.command("status"), /^🛑 onward：开，但设置文件有 1 处问题/);
 	assert.equal(h.notes.at(-1)![0], "warning");
-	assert.match(await h.command("on"), /^onward：开，1 条规则生效/);
+	assert.match(await h.command("on"), /^⏩ onward：开，1 条规则生效/);
 	assert.deepEqual(read(h.configPath), { enabled: true, rules: [{ name: "any" }] });
 
 	// 关着也提醒：可能就是要关掉的那一项写错了。
 	const off = harness({ config: { enabled: false, maxRetries: 0 } });
 	await off.emit("session_start", { reason: "startup" });
 	assert.match(off.warnings()[0], /设置文件有 1 处问题/);
-	assert.match(await off.command(""), /^onward：关；设置文件有 1 处问题/);
+	assert.match(await off.command("status"), /^🛑 onward：关；设置文件有 1 处问题/);
 });
 
 test("show：每个参数的值和来源，再是规则", async () => {
@@ -100,8 +100,8 @@ test("show：每个参数的值和来源，再是规则", async () => {
 	assert.match(text, /action\s+resend（设置文件）/);
 	assert.match(text, /prompt\s+「继续」（内置默认值）/);
 	assert.match(text, /delay\s+5s,10s（设置文件）/);
-	assert.match(text, /1\. auth：错误匹配 \/401\/i → 静默重发同一请求/);
-	assert.match(await h.command("show rules"), /^按顺序第一条命中的生效/);
+	assert.match(text, /^1\. auth\n {3}条件 {2}错误匹配 \/401\/i\n {3}做法 {2}静默重发同一个请求$/m);
+	assert.match(await h.command("show rules"), /^规则（按顺序，第一条命中的生效/);
 });
 
 test("保存时会建目录", () => {

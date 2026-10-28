@@ -80,6 +80,13 @@ export interface Harness {
 	statusWrites: number;
 	/** 用 ctx.ui.addAutocompleteProvider 装上的补全。 */
 	autocomplete: unknown[];
+	/** ctx.ui.select 弹过的菜单；`pick` 决定选哪一项，默认取消。 */
+	menus: { title: string; options: string[] }[];
+	pick: (options: string[]) => string | undefined;
+	/** ctx.ui.setEditorText 最后填的字。 */
+	editorText: string | undefined;
+	/** pi.registerMessageRenderer 注册的渲染器。 */
+	renderers: Map<string, unknown>;
 }
 
 let sessions = 0;
@@ -95,6 +102,10 @@ export function harness(
 	const sent: string[] = [];
 	const notes: [string, string][] = [];
 	const autocomplete: unknown[] = [];
+	const menus: { title: string; options: string[] }[] = [];
+	const renderers = new Map<string, unknown>();
+	let pick: (options: string[]) => string | undefined = () => undefined;
+	let editorText: string | undefined;
 	const controller = new AbortController();
 	const sessionId = `session-${++sessions}`;
 	let pending = 0;
@@ -113,6 +124,13 @@ export function harness(
 				else statuses.set(key, text);
 			},
 			addAutocompleteProvider: (factory: unknown) => autocomplete.push(factory),
+			select: async (title: string, options: string[]) => {
+				menus.push({ title, options });
+				return pick(options);
+			},
+			setEditorText: (text: string) => {
+				editorText = text;
+			},
 		},
 	};
 	const pi = {
@@ -122,6 +140,9 @@ export function harness(
 		},
 		registerCommand(name: string, opts: any) {
 			commands.set(name, opts);
+		},
+		registerMessageRenderer(customType: string, renderer: unknown) {
+			renderers.set(customType, renderer);
 		},
 	};
 	const configPath =
@@ -161,6 +182,17 @@ export function harness(
 			return statusWrites;
 		},
 		autocomplete,
+		menus,
+		renderers,
+		get pick() {
+			return pick;
+		},
+		set pick(value) {
+			pick = value;
+		},
+		get editorText() {
+			return editorText;
+		},
 		set pending(value: number) {
 			pending = value;
 		},
