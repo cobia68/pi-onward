@@ -80,17 +80,43 @@ test("补完一层接着按 Tab，补下一层", async () => {
 	assert.equal(choices.listed, true);
 	assert.match(choices.menu, /→ action=message/);
 	assert.match(choices.menu, /^ {2}action=resend/m);
-	// 几个候选时第一下列出来，第二下补上选中的。
-	assert.equal((await tab("/onward s", 2)).text, "/onward status");
+	// 几个候选时第一下列出来，第二下补上选中的；后面还能写 --help，所以带一个空格。
+	assert.equal((await tab("/onward s", 2)).text, "/onward status ");
 	assert.equal((await tab("/onward set action=r")).text, "/onward set action=resend ");
 });
 
 test("写完的词后面按 Tab：什么都不补，即使有文件名对得上", async () => {
-	for (const text of ["/onward status", "/onward reload ", "/onward set action=resend"]) {
+	for (const text of ["/onward status", "/onward set action=resend", "/onward show rules"]) {
 		const done = await tab(text);
 		assert.equal(done.text, text);
 		assert.equal(done.listed, false, text);
 	}
+});
+
+test("写了 --help 就是结束：再按 Tab 什么都不补，有没有空格都一样", async () => {
+	for (const text of [
+		"/onward --help",
+		"/onward --help ",
+		"/onward set --help",
+		"/onward set --help ",
+		"/onward set action=resend --help ",
+		"/onward status --help ",
+	]) {
+		const done = await tab(text);
+		assert.equal(done.text, text, "不补字段，也不补文件名");
+		assert.equal(done.listed, false, text);
+	}
+});
+
+test("没写 --help 之前：每个动作后面都给它，只剩它时 Tab 直接补上", async () => {
+	assert.equal((await tab("/onward reload ")).text, "/onward reload --help");
+	assert.equal((await tab("/onward st", 2)).text, "/onward status --help", "补完动作再按一下");
+	assert.equal((await tab("/onward show rules ")).text, "/onward show rules --help");
+	assert.equal((await tab("/onward set -")).text, "/onward set --help", "--help 是结束，不带空格");
+	const show = await tab("/onward show ");
+	assert.equal(show.listed, true);
+	assert.match(show.menu, /→ rules/);
+	assert.match(show.menu, /^ {2}--help/m);
 });
 
 test("引号里的值：打字、按 Tab 都不补", async () => {

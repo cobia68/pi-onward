@@ -30,8 +30,9 @@ const UNTIL_FIXED = "修好之前不会自动续跑";
 
 // ── /onward ──
 
-export function commandErrorNotice(message: string): Notice {
-	return warning(`onward：${message}；用法见 /${COMMAND} --help`);
+/** `topic`：出错的动作，用法指到它自己的帮助。 */
+export function commandErrorNotice(message: string, topic?: string): Notice {
+	return warning(`onward：${message}；用法见 /${COMMAND}${topic ? ` ${topic}` : ""} --help`);
 }
 
 export function rulesNotice(config: Config): Notice {
