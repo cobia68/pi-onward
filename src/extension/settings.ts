@@ -1,12 +1,11 @@
 /**
- * 设置文件 `<agent-dir>/onward.json` 的读写。
+ * 设置文件 `onward.json` 的读写；放在哪里由 index.ts 决定。
  *
  * `rules` 只能手写；命令只改 `enabled` 和顶层的参数字段。每次写之前重读文件，在它当前的内容上合并，免得盖掉
- * 加载之后才手改的内容；文件不是合法 JSON 时拒绝写，让用户自己修。
+ * 加载之后才手改的内容；文件读不了（不是合法 JSON、顶层不是对象）时拒绝写，让用户自己修。
  */
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { type Config, fileOrder, parseConfig } from "../policy/config.ts";
 import { FIELD_NAMES } from "../policy/policy.ts";
 import { errorText, isRecord } from "../util.ts";
@@ -60,7 +59,7 @@ export class Settings {
 	update(change: SettingsChange): Saved {
 		const current = readJson(this.path);
 		if (current.kind === "broken") return current;
-		const next = applyChange(current.kind === "ok" && isRecord(current.value) ? current.value : {}, change);
+		const next = applyChange(current.kind === "ok" ? current.value : {}, change);
 		this.loaded = { config: parseConfig(next), source: { kind: "file" } };
 		try {
 			writeJson(this.path, next);
@@ -76,11 +75,6 @@ export class Settings {
 	}
 }
 
-/** `PI_ONWARD_CONFIG` 可改路径。 */
-export function defaultPath(env: NodeJS.ProcessEnv = process.env): string {
-	return env.PI_ONWARD_CONFIG || join(env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "onward.json");
-}
-
 function applyChange(base: Record<string, unknown>, change: SettingsChange): Record<string, unknown> {
 	const next: Record<string, unknown> = { ...base, ...change.set };
 	if (change.enabled !== undefined) next.enabled = change.enabled;
@@ -94,7 +88,10 @@ function load(path: string): Loaded {
 	return { config: parseConfig(undefined), source: current.kind === "broken" ? current : { kind: "none" } };
 }
 
-type ReadResult = { kind: "missing" } | { kind: "broken"; error: string } | { kind: "ok"; value: unknown };
+type ReadResult =
+	| { kind: "missing" }
+	| { kind: "broken"; error: string }
+	| { kind: "ok"; value: Record<string, unknown> };
 
 function readJson(path: string): ReadResult {
 	let text: string;
@@ -104,11 +101,13 @@ function readJson(path: string): ReadResult {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
 		return { kind: "broken", error: errorText(error) };
 	}
+	let value: unknown;
 	try {
-		return { kind: "ok", value: JSON.parse(text) };
+		value = JSON.parse(text);
 	} catch (error: unknown) {
-		return { kind: "broken", error: errorText(error) };
+		return { kind: "broken", error: `不是合法 JSON：${errorText(error)}` };
 	}
+	return isRecord(value) ? { kind: "ok", value } : { kind: "broken", error: "顶层需要是对象 {}" };
 }
 
 /** 先写临时文件再改名：写到一半失败也不会留下半个文件；改名之后临时文件已不在，删它不做事。 */

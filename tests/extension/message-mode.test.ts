@@ -140,12 +140,12 @@ test("没有内置规则：没写 rules 或全部写坏都不续跑，启动时�
 	assert.equal(await none.boundary(err()), undefined);
 	assert.match(await none.command(""), /^onward：开，没有可用的规则/);
 
-	// 只想处理 401，但 when 的键拼错了：整条丢掉，也不会退回「任何错误都续跑」。
+	// 只想处理 401，但 when 的键拼错了：整份设置不生效，也不会退回「任何错误都续跑」。
 	const typo = harness({
 		config: { delay: "0s", rules: [{ name: "auth", when: { errr: "401" } }] },
 	});
 	await typo.emit("session_start", { reason: "startup" });
-	assert.match(typo.warnings()[0], /没有可用的规则.*设置文件有 1 处问题/);
+	assert.match(typo.warnings()[0], /设置文件有 1 处问题，修好之前不会自动续跑/);
 	assert.equal(await typo.boundary(err("429 rate limited")), undefined);
 
 	// 全部停用也算没有可用的规则；关掉了就不提醒。
@@ -169,4 +169,19 @@ test("action=stop 的规则：命中就停、只提醒，不会落到后面的�
 	await h.emit("agent_start");
 	await h.boundary(err("502 upstream"));
 	assert.deepEqual(h.sent, ["继续"]);
+});
+
+test("stop 规则里的键拼错了：整份设置不生效，额度错误不会落到兜底去续跑", async () => {
+	const h = harness({
+		config: {
+			delay: "0s",
+			rules: [{ name: "quota", when: { error: "quota" }, acton: "stop" }, { name: "any" }],
+		},
+	});
+	await h.emit("session_start", { reason: "startup" });
+	assert.match(h.warnings()[0], /设置文件有 1 处问题，修好之前不会自动续跑/);
+	assert.equal(await h.boundary(err("429 insufficient_quota")), undefined);
+	assert.equal(await h.boundary(err("502 upstream")), undefined);
+	assert.deepEqual(h.sent, []);
+	assert.match(await h.command("show rules"), /^设置文件有 1 处问题[\s\S]*- rules\[0\]（quota）\.acton 不认识/);
 });

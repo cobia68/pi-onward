@@ -8,12 +8,12 @@ const rulesOf = (raw: unknown) => {
 	return { rules: parseRules(raw, problems), problems };
 };
 
-test("没有内置规则：没写或全部写坏时什么都不命中", () => {
+test("没有内置规则：没写时什么都不命中；不带 when 的规则是显式兜底", () => {
 	assert.equal(findRule([], err()), undefined);
 	const typo = rulesOf([{ name: "only-401", when: { errr: "401" } }]);
 	assert.deepEqual(typo.rules, []);
-	assert.equal(findRule(typo.rules, err("429 rate limited")), undefined);
-	assert.equal(findRule(rulesOf([{ name: "any" }]).rules, err("502"))?.name, "any", "不带 when 的规则是显式兜底");
+	assert.deepEqual(typo.problems, ["rules[0]（only-401）.when.errr 不认识"]);
+	assert.equal(findRule(rulesOf([{ name: "any" }]).rules, err("502"))?.name, "any");
 });
 
 test("按顺序第一条命中；没命中的错误不处理；停用的跳过", () => {
@@ -31,7 +31,6 @@ test("通配只认 *，大小写不敏感，整串匹配", () => {
 	assert.equal(glob("welfare-*", "Welfare-K40"), true);
 	assert.equal(glob("welfare-*", "x-welfare-k40"), false);
 	assert.equal(glob("a.b", "aXb"), false);
-	assert.equal(glob("*", undefined), false);
 });
 
 test("规则的参数和顶层同名，平铺在规则里", () => {
@@ -55,33 +54,39 @@ test("规则的参数和顶层同名，平铺在规则里", () => {
 	]);
 });
 
-test("看不懂的条件或动作整条丢掉，不让它匹配得更宽；看不懂的参数只忽略那一项", () => {
+test("读不懂的地方都记下来，一次改完；有一处就不返回这条规则，也不退回默认值", () => {
 	const { rules, problems } = rulesOf([
 		{ name: "a", when: { error: "(" } },
 		{ name: "b", when: { stopReason: "error" } },
-		{ name: "c", when: { tool: "bash" } },
-		{ name: "d", action: "switchModel" },
-		{ name: "e", when: { provider: "" } },
-		{ name: "ok", extra: 1, colour: "red", maxRetries: 0 },
+		{ name: "c", when: { provider: "" }, action: "switchModel" },
+		// 拼错的键：忽略它的话 action 退回 message，本该停的错误会续跑。
+		{ name: "d", when: { error: "quota" }, acton: "stop" },
+		{ name: "e", maxRetries: 0 },
+		{ name: "f", enabled: "false" },
+		{ name: "  " },
+		{ name: "ok" },
 		{ name: "ok" },
 		"nope",
 	]);
 	assert.deepEqual(
-		rules.map((r) => [r.name, r.patch]),
-		[["ok", {}]],
+		rules.map((r) => r.name),
+		["ok"],
 	);
-	for (const marker of ["rules[0]", "rules[1]", "rules[2]", "rules[3]", "rules[4]", "rules[6]", "rules[7]"])
-		assert.ok(
-			problems.some((p) => p.startsWith(marker)),
-			`${marker} 应记问题：${problems.join(" | ")}`,
-		);
-	assert.ok(problems.includes("rules[3]（d）.action 只能是 message、resend 或 stop，已丢弃"));
-	assert.ok(problems.includes("rules[5]（ok）.maxRetries 需要 1–50 的整数，已忽略"));
-	assert.ok(problems.includes("rules[5]（ok）.extra 不认识，已忽略"));
-	assert.ok(problems.includes("rules[5]（ok）.colour 不认识，已忽略"));
+	assert.match(problems[0]!, /^rules\[0\]（a）\.when\.error 不是合法正则/);
+	assert.deepEqual(problems.slice(1), [
+		"rules[1]（b）.when.stopReason 不认识",
+		"rules[2]（c）.when.provider 需要非空字符串",
+		"rules[2]（c）.action 只能是 message、resend 或 stop",
+		"rules[3]（d）.acton 不认识",
+		"rules[4]（e）.maxRetries 需要 1–50 的整数",
+		"rules[5]（f）.enabled 需要 true 或 false",
+		"rules[6].name 需要非空文字",
+		"rules[8] 与前面的规则重名（ok）",
+		"rules[9] 不是对象",
+	]);
 });
 
-test("没名字的规则按位置起名；enabled=false 保留但停用；rules 不是数组时忽略", () => {
+test("没名字的规则按位置起名；enabled=false 保留但停用；rules 不是数组时记问题", () => {
 	assert.deepEqual(
 		rulesOf([{}, { enabled: false }]).rules.map((r) => [r.name, r.enabled]),
 		[
@@ -89,5 +94,5 @@ test("没名字的规则按位置起名；enabled=false 保留但停用；rules 
 			["rule-2", false],
 		],
 	);
-	assert.deepEqual(rulesOf({}).problems, ["rules 需要数组，已忽略"]);
+	assert.deepEqual(rulesOf({}).problems, ["rules 需要数组"]);
 });

@@ -26,6 +26,7 @@ const warning = (message: string): Notice => ({ message, level: "warning" });
 
 const NO_RULES = "没有可用的规则，出错时不会自动续跑";
 const SEE_README = "常见规则见 README";
+const UNTIL_FIXED = "修好之前不会自动续跑";
 
 // ── /onward ──
 
@@ -50,16 +51,16 @@ export function showNotice(settings: Settings): Notice {
 }
 
 export function statusNotice(settings: Settings, progress: Progress): Notice {
-	return { message: statusText(settings, progress), level: settings.source.kind === "broken" ? "warning" : "info" };
+	return { message: statusText(settings, progress), level: needsFix(settings) ? "warning" : "info" };
 }
 
 /** 一次修改之后：写好了就是当前状态，`done` 跟在后面；否则说明为什么。 */
 export function changedNotice(saved: Saved, settings: Settings, progress: Progress, done = ""): Notice {
 	switch (saved.kind) {
 		case "saved":
-			return info(`${statusText(settings, progress)}${done}`);
+			return { message: `${statusText(settings, progress)}${done}`, level: needsFix(settings) ? "warning" : "info" };
 		case "broken":
-			return warning(`onward：${settings.path} 不是合法 JSON（${saved.error}），先修好；未做任何修改`);
+			return warning(`onward：${settings.path} 读不了（${saved.error}），先修好；未做任何修改`);
 		case "unwritten":
 			return warning(`onward：设置没能保存（${saved.error}），本次运行仍然生效\n${statusText(settings, progress)}`);
 	}
@@ -78,19 +79,17 @@ export function describePolicy(policy: Policy): string {
 	return `${how}，最多 ${policy.maxRetries} 次；间隔 ${steps.join(" → ")}${more}（合计约 ${total}）；同一个错误连续 ${policy.maxSameError} 次后也停`;
 }
 
-/** `/onward show rules` 的全文。 */
+/** `/onward show rules` 的全文。有问题时只列问题：规则反正不生效，列出来反而像在跑。 */
 export function describeRules(config: Config): string {
-	const problems = config.problems.length
-		? `\n设置文件里的问题：\n${config.problems.map((p) => `- ${p}`).join("\n")}`
-		: "";
-	if (!config.rules.length)
-		return `${NO_RULES}。在设置文件的 rules 里写（${SEE_README}），再 /${COMMAND} reload${problems}`;
+	if (config.problems.length)
+		return `设置文件有 ${config.problems.length} 处问题，${UNTIL_FIXED}：\n${config.problems.map((p) => `- ${p}`).join("\n")}\n改完 /${COMMAND} reload`;
+	if (!config.rules.length) return `${NO_RULES}。在设置文件的 rules 里写（${SEE_README}），再 /${COMMAND} reload`;
 	const lines = config.rules.map((rule, index) => {
 		const state = rule.enabled ? "" : "（已停用）";
 		const policy = describePolicy(resolvePolicy(config.defaults, rule.patch));
 		return `${index + 1}. ${rule.name}${state}：${describeWhen(rule)} → ${policy}`;
 	});
-	return `按顺序第一条命中的生效，没有命中的错误不处理：\n${lines.join("\n")}${problems}`;
+	return `按顺序第一条命中的生效，没有命中的错误不处理：\n${lines.join("\n")}`;
 }
 
 function describeWhen({ when }: Rule): string {
@@ -104,7 +103,9 @@ function describeWhen({ when }: Rule): string {
 
 function statusText(settings: Settings, { used, streak }: Progress): string {
 	const { config } = settings;
-	if (!config.enabled) return `onward：关；${describeSource(settings)}`;
+	const problems = problemCount(config);
+	if (!config.enabled) return ["onward：关", problems, describeSource(settings)].filter(Boolean).join("；");
+	if (problems) return [`onward：开，但${problems}`, describeSource(settings)].join("；");
 	const usable = usableRules(config);
 	return [
 		usable
@@ -112,7 +113,6 @@ function statusText(settings: Settings, { used, streak }: Progress): string {
 			: `onward：开，${NO_RULES}（${SEE_README}）`,
 		`规则没写的参数：${describePolicy(resolvePolicy(config.defaults))}`,
 		describeSource(settings),
-		problemCount(config),
 		used || streak ? `恢复前已续跑 ${used} 次，同错连续 ${streak} 次` : "",
 	]
 		.filter(Boolean)
@@ -126,8 +126,13 @@ function describeSource({ source, path }: Settings): string {
 		case "none":
 			return `还没有设置文件（${path}）`;
 		case "broken":
-			return `${path} 读不了：${source.error}，修好之前不会自动续跑`;
+			return `${path} 读不了：${source.error}，${UNTIL_FIXED}`;
 	}
+}
+
+/** 文件读不了，或者内容有读不懂的地方。 */
+function needsFix(settings: Settings): boolean {
+	return settings.source.kind === "broken" || settings.config.problems.length > 0;
 }
 
 function usableRules(config: Config): number {
@@ -135,22 +140,21 @@ function usableRules(config: Config): number {
 }
 
 function problemCount(config: Config): string {
-	return config.problems.length ? `设置文件有 ${config.problems.length} 处问题（/${COMMAND} show）` : "";
+	return config.problems.length
+		? `设置文件有 ${config.problems.length} 处问题，${UNTIL_FIXED}（/${COMMAND} show）`
+		: "";
 }
 
 // ── 运行中的通知 ──
 
-/** 启动时值得说的事：设置文件坏了、没有可用的规则。 */
+/** 启动时值得说的事：设置文件读不了或有问题（关着也说，可能就是 enabled 写错了）、没有可用的规则。 */
 export function startupNotices(settings: Settings): Notice[] {
 	const { config, source, path } = settings;
-	const notices: Notice[] = [];
-	if (source.kind === "broken") notices.push(warning(`onward：${describeSource(settings)}`));
-	else if (config.enabled && !usableRules(config)) {
-		const problems = problemCount(config);
-		const message = `onward：${NO_RULES}；在 ${path} 的 rules 里写（${SEE_README}）`;
-		notices.push(problems ? warning(`${message}；${problems}`) : info(message));
-	}
-	return notices;
+	if (source.kind === "broken") return [warning(`onward：${describeSource(settings)}`)];
+	if (config.problems.length) return [warning(`onward：${path} ${problemCount(config)}`)];
+	if (config.enabled && !usableRules(config))
+		return [info(`onward：${NO_RULES}；在 ${path} 的 rules 里写（${SEE_README}）`)];
+	return [];
 }
 
 export function retryNotice(hit: Hit, step: Retry, draft: Continue): Notice {

@@ -63,7 +63,7 @@ pi install ./pi-onward
 
 ## 📝 设置文件
 
-`~/.pi/agent/onward.json`（环境变量 `PI_ONWARD_CONFIG` 可改路径）。没有这个文件、或者里面没有可用的规则，出错时什么都不做，启动时提醒一句。`/onward` 命令只改 `enabled` 和顶层的参数，`rules` 要手写，改完 `/onward reload`。
+`~/.pi/agent/onward.json`：在 pi 的配置目录里，设了 `PI_CODING_AGENT_DIR` 就跟着它；环境变量 `PI_ONWARD_CONFIG` 可以直接指定路径。没有这个文件、或者里面没有规则，出错时什么都不做，启动时提醒一句。`/onward` 命令只改 `enabled` 和顶层的参数，`rules` 要手写，改完 `/onward reload`。
 
 顶层写的参数就是每条规则的默认值，规则里只写和顶层不同的字段。下面是全部字段的说明，`//` 注释只为说明，真实文件是纯 JSON，不能写注释；可以直接复制的见[常见规则](#-常见规则)。
 
@@ -95,7 +95,7 @@ pi install ./pi-onward
 
 一条规则由条件 `when` 和参数组成，参数的名字和顶层一样。
 
-- **没有内置规则**。没写 `rules`、或者写的全被丢掉，出错时什么都不做。顶层的参数只是规则没写时的默认值，本身不会触发续跑。
+- **没有内置规则**。没写 `rules`，出错时什么都不做。顶层的参数只是规则没写时的默认值，本身不会触发续跑。
 - 按顺序第一条命中的生效，**没命中的错误不处理**。想兜底就在最后放一条不带 `when` 的规则。
 - `"action": "stop"` 的规则命中就停、只提醒，也挡住后面的兜底。适合额度用完这类重试没用的错误。
 - `enabled: false` 的规则保留但跳过。
@@ -103,7 +103,7 @@ pi install ./pi-onward
 
 | 字段 | 说明 |
 | :--- | :--- |
-| `name` | 规则名，出现在通知里；不写时按位置叫 `rule-1`、`rule-2` |
+| `name` | 规则名，出现在通知里，不能重名；不写时按位置叫 `rule-1`、`rule-2` |
 | `enabled` | `false` 时保留但跳过 |
 | `when.error` | 正则，大小写不敏感，对原始错误文案匹配 |
 | `when.provider` / `when.model` | 通配，只有 `*` 有特殊含义，大小写不敏感，整串匹配 |
@@ -111,7 +111,7 @@ pi install ./pi-onward
 
 `prompt` 里可以写 `{attempt}`（第几次）、`{max}`（最多几次）、`{error}`（错误摘要）、`{rule}`（规则名）。
 
-看不懂的条件或 `action` 会让整条规则被丢掉，免得它匹配得比写的人以为的更宽、或者多发请求；其他看不懂或超出范围的参数只忽略那一项，退回顶层的值，不会悄悄改成范围内的数。丢掉和忽略的内容用 `/onward show` 查看。设置文件不是合法 JSON 时一条规则都没有，启动时提醒；命令不会改写它，也不改设置，回复「未做任何修改」。
+**设置文件里有读不懂的地方，整份不生效**，修好之前不会自动续跑，启动时和 `/onward` 都会提醒。拼错或不认识的键、超出范围的值、不是 `true` / `false` 的 `enabled`、重名的规则都算。不会只丢掉写坏的那部分、其余照跑：那样错误会落到更宽的规则或默认值上，比如写坏了的 `stop` 规则让额度错误落到兜底去续跑，多发真实请求。问题用 `/onward show` 查看，改完 `/onward reload`。设置文件不是合法 JSON、或者顶层不是对象时也一样；这时命令不会改写它，回复「未做任何修改」。
 
 ## 📋 常见规则
 
@@ -203,6 +203,6 @@ npm run check                # biome + tsc + 测试 + 用 pi 的加载器加载�
 
 | 目录 | 内容 |
 | :--- | :--- |
-| `src/policy/` | 纯逻辑，不碰 pi 和文件：什么算失败（`failure`）、命中哪条规则（`rules`）、按什么参数（`policy`，一张字段表管校验、帮助和补全）、等多久（`delay`）、什么时候停（`tracker`）；`config` 把它们拼成设置文件的模型 |
-| `src/extension/` | 接 pi：`onward` 处理事件并续跑，`command` 是 `/onward`，`settings` 读写设置文件，`text` 是给人看的文字，`index` 把它们装起来 |
-| `tests/` | `node:test`，目录与 `src/` 对应；`tests/support/fake-pi.ts` 按 pi 的真实事件顺序发事件 |
+| `src/policy/` | 纯逻辑，不碰 pi 的运行时和文件（只用 pi 的类型）：什么算失败（`failure`）、命中哪条规则（`rules`）、按什么参数（`policy`，一张字段表管校验、帮助和补全）、等多久（`delay`）、什么时候停（`tracker`）；`config` 把它们拼成设置文件的模型 |
+| `src/extension/` | 接 pi：`onward` 处理事件并续跑，`command` 是 `/onward`，`settings` 读写设置文件，`text` 是给人看的文字，`install` 把它们装起来；`index` 是 pi 加载的入口，只决定设置文件放在哪里 |
+| `tests/` | `node:test`，目录与 `src/` 对应；`tests/support/fake-pi.ts` 按 pi 的真实事件顺序发事件，直接装 `install`，不加载 pi 本体。入口和设置文件的位置由 `scripts/check-extension.mjs` 用 pi 自己的加载器检查 |

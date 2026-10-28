@@ -27,8 +27,6 @@ export interface Field<K extends keyof Policy = keyof Policy> {
 	description: string;
 	/** 补全的候选值。 */
 	choices?: readonly { value: string; description: string }[];
-	/** 规则里读不懂时整条规则丢掉：读错它可能多发真实请求。这样的字段排在字段表最前面。 */
-	failClosed?: boolean;
 	/** 设置文件里的值；合法时返回 value，否则返回原因。 */
 	read(value: unknown): { value: Policy[K] } | { problem: string };
 	/** 命令里的文字 → 设置文件里的值。 */
@@ -51,7 +49,6 @@ export const FIELDS: readonly Field[] = [
 		syntax: ACTIONS.map((item) => item.value).join(" | "),
 		description: "怎么续跑",
 		choices: ACTIONS,
-		failClosed: true,
 		read: (v) =>
 			ACTIONS.some((item) => item.value === v)
 				? { value: v as Action }
@@ -119,31 +116,17 @@ export function resolvePolicy(defaults: PolicyPatch, rule: PolicyPatch = {}): Po
 }
 
 /**
- * 设置文件顶层的参数：合法的收下，不合法的丢掉并记问题（不夹到范围内）；不是参数的键交给调用方。
+ * 读设置文件顶层或一条规则里的参数：合法的收下，不合法的记一条问题，不夹到范围内、也不退回默认值。
+ * 有问题的设置整份不生效（见 config.ts），所以这里不用分哪些字段要紧。不是参数的键交给调用方。
+ * `where` 是问题里的位置前缀，如 `rules[2]（auth）.`。
  */
-export function readParams(raw: Record<string, unknown>, problems: string[]): PolicyPatch {
-	return read(raw, "", problems, false) as PolicyPatch;
-}
-
-/** 一条规则的参数，同上；读不懂 failClosed 的字段时整条规则丢掉，返回 undefined。`where` 如 `rules[2]（auth）.`。 */
-export function readRuleParams(
-	raw: Record<string, unknown>,
-	where: string,
-	problems: string[],
-): PolicyPatch | undefined {
-	return read(raw, where, problems, true);
-}
-
-function read(raw: Record<string, unknown>, where: string, problems: string[], rule: boolean): PolicyPatch | undefined {
+export function readParams(raw: Record<string, unknown>, where: string, problems: string[]): PolicyPatch {
 	const patch: Record<string, unknown> = {};
 	for (const item of FIELDS) {
 		if (!Object.hasOwn(raw, item.name)) continue;
 		const result = item.read(raw[item.name]);
 		if ("value" in result) patch[item.name] = result.value;
-		else if (rule && item.failClosed) {
-			problems.push(`${where}${item.name} ${result.problem}，已丢弃`);
-			return undefined;
-		} else problems.push(`${where}${item.name} ${result.problem}，已忽略`);
+		else problems.push(`${where}${item.name} ${result.problem}`);
 	}
 	return patch;
 }

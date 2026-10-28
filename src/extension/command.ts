@@ -3,6 +3,7 @@
  * 不合法就一项都不写。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isActive } from "../policy/config.ts";
 import { FIELD_NAMES, FIELDS, type Field, fieldNamed } from "../policy/policy.ts";
 import type { Onward } from "./onward.ts";
 import type { Settings, SettingsChange } from "./settings.ts";
@@ -63,8 +64,8 @@ export function registerCommand(pi: ExtensionAPI, settings: Settings, onward: On
 		getArgumentCompletions: (prefix) => completeArguments(prefix),
 		handler: async (args, ctx) => {
 			const notice = execute(parseCommand(args), settings, onward, ctx);
-			// 不管是命令关的还是 reload 读到手改的关，关了就不该还有等着的续跑。
-			if (!settings.config.enabled) onward.stop(ctx);
+			// 不管是命令关的、还是 reload 读到手改的关或有问题的设置，不生效了就不该还有等着的续跑。
+			if (!isActive(settings.config)) onward.stop(ctx);
 			say(ctx, notice);
 		},
 	});
@@ -224,7 +225,8 @@ interface Candidate {
 /** 补全：动作、show 的 rules、set 和 unset 的字段名、action 的取值。都写完了就不给，回车直接执行。 */
 export function completeArguments(prefix: string): { value: string; label: string; description: string }[] | null {
 	const tokens = prefix.trimStart().split(/\s+/);
-	const current = tokens.pop() ?? "";
+	// split 至少返回一项：正在写的那个词，可能是空串。
+	const current = tokens.pop()!;
 	const head = tokens.length ? `${tokens.join(" ")} ` : "";
 	const shown = candidates(tokens, current).filter((item) =>
 		item.value.toLowerCase().startsWith(current.toLowerCase()),

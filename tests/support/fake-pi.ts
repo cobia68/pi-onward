@@ -2,10 +2,11 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { install, type OnwardOptions } from "../../src/extension/index.ts";
-import type { Failure } from "../../src/policy/failure.ts";
+import { install } from "../../src/extension/install.ts";
+import type { AgentMessage, Failure } from "../../src/policy/failure.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
+type Assistant = Extract<AgentMessage, { role: "assistant" }>;
 
 export function tempDir(): string {
 	return mkdtempSync(join(tmpdir(), "pi-onward-"));
@@ -18,17 +19,31 @@ export function writeConfig(value: unknown, dir = tempDir()): string {
 	return path;
 }
 
-export const err = (errorMessage = "401 Invalid API key", extra: Partial<Failure> = {}): Failure => ({
+/** 一条字段齐全的助手消息，和 pi 发来的一样。 */
+export const assistant = (extra: Partial<Assistant> = {}): Assistant => ({
 	role: "assistant",
-	stopReason: "error",
-	errorMessage,
+	content: [],
+	api: "anthropic-messages",
 	provider: "welfare-100xlabs",
 	model: "claude-opus-5-5",
+	usage: {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	},
+	stopReason: "stop",
+	timestamp: 0,
 	...extra,
 });
-export const ok = () => ({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] });
-export const tool = () => ({ role: "assistant", stopReason: "toolUse", content: [] });
-export const aborted = () => ({ role: "assistant", stopReason: "aborted", errorMessage: "Operation aborted" });
+
+export const err = (errorMessage = "401 Invalid API key", extra: Partial<Assistant> = {}): Failure =>
+	assistant({ errorMessage, ...extra, stopReason: "error" }) as Failure;
+export const ok = () => assistant({ content: [{ type: "text", text: "done" }] });
+export const tool = () => assistant({ stopReason: "toolUse" });
+export const aborted = () => assistant({ stopReason: "aborted", errorMessage: "Operation aborted" });
 
 /** 收尾边界事件：最后一条上下文是 `message`。 */
 export function boundaryEvent(message: any, id = "e1", extra: Record<string, unknown> = {}) {
@@ -67,8 +82,10 @@ export interface Harness {
 
 let sessions = 0;
 
-export function harness(options: OnwardOptions & { config?: unknown; copies?: number; ui?: boolean } = {}): Harness {
-	const { config, copies = 1, ui = true, ...installOptions } = options;
+export function harness(
+	options: { configPath?: string; config?: unknown; copies?: number; ui?: boolean } = {},
+): Harness {
+	const { config, copies = 1, ui = true } = options;
 	const statuses = new Map<string, string>();
 	let statusWrites = 0;
 	const handlers = new Map<string, Handler[]>();
@@ -104,8 +121,8 @@ export function harness(options: OnwardOptions & { config?: unknown; copies?: nu
 		},
 	};
 	const configPath =
-		installOptions.configPath ?? (config === undefined ? join(tempDir(), "onward.json") : writeConfig(config));
-	for (let i = 0; i < copies; i++) install(pi as any, { ...installOptions, configPath });
+		options.configPath ?? (config === undefined ? join(tempDir(), "onward.json") : writeConfig(config));
+	for (let i = 0; i < copies; i++) install(pi as any, configPath);
 
 	// 和 pi 一样：边界上后一个处理器看到前面提出的条目和继续要求。
 	const emit = async (event: string, payload: any = {}) => {

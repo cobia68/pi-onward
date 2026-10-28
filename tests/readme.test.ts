@@ -8,7 +8,7 @@ import { err } from "./support/fake-pi.ts";
 
 const readText = (file: string) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 
-function commonRules(): unknown {
+function commonRules(): Record<string, unknown> {
 	const section = readText("README.md").split(/^## .*常见规则\s*$/m)[1];
 	assert.ok(section, "README 里要有「常见规则」一节");
 	const block = /```json\r?\n([\s\S]*?)\r?\n```/.exec(section);
@@ -51,5 +51,5 @@ test("example.json：解析无问题，顶层参数就是内置默认值，rules
 	const config = parseConfig(example);
 	assert.deepEqual(config.problems, []);
 	assert.deepEqual(config.defaults, { ...DEFAULT_POLICY });
-	assert.deepEqual(example.rules, (commonRules() as { rules: unknown }).rules);
+	assert.deepEqual(example.rules, commonRules().rules);
 });

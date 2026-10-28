@@ -1,26 +1,23 @@
 /** 什么算失败、什么算恢复，以及两次失败算不算「同一个错误」。 */
+import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 
-/** 以错误结束的助手消息里用得到的字段。 */
-export interface Failure {
-	role: "assistant";
-	stopReason: "error";
-	errorMessage?: string;
-	provider?: string;
-	model?: string;
-}
+/** pi 的会话消息；只取类型，运行时不碰 pi。 */
+export type AgentMessage = MessageEndEvent["message"];
+type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+
+/** 以错误结束的助手消息。provider、model 是 pi 必填的；errorMessage 可能没有。 */
+export type Failure = AssistantMessage & { stopReason: "error" };
 
 /** 用户按 Esc 是 `aborted`，不算失败。 */
-export function isFailure(message: unknown): message is Failure {
-	const m = message as Partial<Failure> | undefined;
-	return m?.role === "assistant" && m.stopReason === "error";
+export function isFailure(message: AgentMessage | undefined): message is Failure {
+	return message?.role === "assistant" && message.stopReason === "error";
 }
 
-const SUCCESS = new Set(["stop", "length", "toolUse", "deferred"]);
+const SUCCESS: ReadonlySet<AssistantMessage["stopReason"]> = new Set(["stop", "length", "toolUse", "deferred"]);
 
 /** 助手正常返回了一次（包括中间的工具轮），说明已经恢复。 */
-export function isSuccess(message: unknown): boolean {
-	const m = message as { role?: unknown; stopReason?: unknown } | undefined;
-	return m?.role === "assistant" && SUCCESS.has(m.stopReason as string);
+export function isSuccess(message: AgentMessage): boolean {
+	return message.role === "assistant" && SUCCESS.has(message.stopReason);
 }
 
 /**

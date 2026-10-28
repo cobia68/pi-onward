@@ -57,12 +57,39 @@ test("坏 JSON：不续跑、拒绝写、提示", async () => {
 	const path = writeConfig("{ not json");
 	const h = harness({ configPath: path });
 	await h.emit("session_start", { reason: "startup" });
-	assert.match(h.warnings()[0], /读不了/);
-	assert.match(await h.command("set maxRetries=5"), /不是合法 JSON.*先修好；未做任何修改$/);
+	assert.match(h.warnings()[0], /读不了：不是合法 JSON/);
+	assert.match(await h.command("set maxRetries=5"), /读不了（不是合法 JSON.*先修好；未做任何修改$/);
 	assert.doesNotMatch(await h.command(""), /最多 5 次/, "没有改");
 	assert.match(await h.command("reset"), /未做任何修改$/);
 	assert.equal(readFileSync(path, "utf8"), "{ not json", "原文件没被覆盖");
 	assert.equal(new Settings(path).reset().kind, "broken");
+});
+
+test("顶层不是对象：和坏 JSON 一样，不当成空设置，也不被命令覆盖", async () => {
+	for (const text of ["[]", "null", '"x"']) {
+		const path = writeConfig(text);
+		const h = harness({ configPath: path });
+		await h.emit("session_start", { reason: "startup" });
+		assert.match(h.warnings()[0], /读不了：顶层需要是对象/, text);
+		assert.match(await h.command("set maxRetries=5"), /未做任何修改$/, text);
+		assert.equal(readFileSync(path, "utf8"), text, text);
+	}
+});
+
+test("内容有问题：启动和状态都说清不会续跑；命令照常合并写入，修好就生效", async () => {
+	const h = harness({ config: { enabled: "yes", rules: [{ name: "any" }] } });
+	await h.emit("session_start", { reason: "startup" });
+	assert.match(h.warnings()[0], /设置文件有 1 处问题，修好之前不会自动续跑/);
+	assert.match(await h.command(""), /^onward：开，但设置文件有 1 处问题/);
+	assert.equal(h.notes.at(-1)![0], "warning");
+	assert.match(await h.command("on"), /^onward：开，1 条规则生效/);
+	assert.deepEqual(read(h.configPath), { enabled: true, rules: [{ name: "any" }] });
+
+	// 关着也提醒：可能就是要关掉的那一项写错了。
+	const off = harness({ config: { enabled: false, maxRetries: 0 } });
+	await off.emit("session_start", { reason: "startup" });
+	assert.match(off.warnings()[0], /设置文件有 1 处问题/);
+	assert.match(await off.command(""), /^onward：关；设置文件有 1 处问题/);
 });
 
 test("show：每个参数的值和来源，再是规则", async () => {

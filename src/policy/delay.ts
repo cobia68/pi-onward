@@ -33,9 +33,8 @@ export function parseDelay(text: string): Delay | string {
 
 /** 第 `attempt` 次（从 1 开始）续跑前等多久。 */
 export function retryDelay(attempt: number, delay: Delay): number {
-	const n = Math.max(attempt, 1);
-	if (delay.kind === "list") return delay.steps[Math.min(n, delay.steps.length) - 1]!;
-	return Math.min(delay.step * n, delay.cap);
+	if (delay.kind === "list") return delay.steps[Math.min(attempt, delay.steps.length) - 1]!;
+	return Math.min(delay.step * attempt, delay.cap);
 }
 
 /** 前 `count` 次的间隔之和。 */
