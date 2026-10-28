@@ -69,16 +69,19 @@ pi install ./pi-onward
 
 ```jsonc
 {
-  "enabled": true,              // 插件开关；不是默认值
-  "action": "message",          // message | resend | stop
+  "enabled": true,               // 插件开关；不是默认值
+  "action": "message",           // message | resend | stop
   "prompt": "继续",              // message 发的消息
-  "maxRetries": 10,             // 1–50
-  "maxSameError": 10,           // 1–100
-  "delay": "3s..15s",           // 或 "5s,10s,30s"
+  "maxRetries": 10,              // 1–50
+  "maxSameError": 10,            // 1–100
+  "delay": "3s..15s",            // 或 "5s,10s,30s"
   "rules": [
     {
       "name": "relay-auth",
-      "when": { "error": "401|invalid\\s*(api\\s*)?(key|token)", "provider": "welfare-*" },
+      "when": {
+        "error": "401|invalid\\s*(api\\s*)?(key|token)",
+        "provider": "welfare-*"
+      },
       "action": "resend",
       "maxRetries": 20,
       "delay": "3s..10s"
@@ -120,13 +123,59 @@ pi install ./pi-onward
 ```json
 {
   "rules": [
-    { "name": "quota", "when": { "error": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|usage limit|余额不足|额度不足|额度已用尽" }, "action": "stop" },
-    { "name": "context-overflow", "when": { "error": "context[\\s_-]*(length|window)|prompt (is )?too long|maximum context|request_too_large" }, "action": "stop" },
-    { "name": "auth", "when": { "error": "\\b401\\b|unauthorized|authentication|invalid[\\s_-]*(x-)?(api[\\s_-]*)?(key|token)" }, "action": "resend", "maxRetries": 20, "delay": "3s..10s" },
-    { "name": "rate-limit", "when": { "error": "\\b429\\b|rate[\\s_-]*limit|too many requests|resource[\\s_-]*exhausted" }, "action": "resend", "maxRetries": 5, "delay": "30s,1m,2m" },
-    { "name": "server", "when": { "error": "\\b(500|502|503|504|520|524|529)\\b|overloaded|server[\\s_-]*error|internal[\\s_-]*error|bad gateway|service[\\s_-]*unavailable|upstream|负载已饱和" }, "action": "resend" },
-    { "name": "network", "when": { "error": "connection|network|econnreset|econnrefused|etimedout|socket hang up|fetch failed|timed? ?out|terminated" }, "action": "resend" },
-    { "name": "fallback", "action": "message", "prompt": "上一步出错了（{error}），接着做", "maxRetries": 3, "maxSameError": 2 }
+    {
+      "name": "quota",
+      "when": {
+        "error": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|usage limit|余额不足|额度不足|额度已用尽"
+      },
+      "action": "stop"
+    },
+    {
+      "name": "context-overflow",
+      "when": {
+        "error": "context[\\s_-]*(length|window)|prompt (is )?too long|maximum context|request_too_large"
+      },
+      "action": "stop"
+    },
+    {
+      "name": "auth",
+      "when": {
+        "error": "\\b401\\b|unauthorized|authentication|invalid[\\s_-]*(x-)?(api[\\s_-]*)?(key|token)"
+      },
+      "action": "resend",
+      "maxRetries": 20,
+      "delay": "3s..10s"
+    },
+    {
+      "name": "rate-limit",
+      "when": {
+        "error": "\\b429\\b|rate[\\s_-]*limit|too many requests|resource[\\s_-]*exhausted"
+      },
+      "action": "resend",
+      "maxRetries": 5,
+      "delay": "30s,1m,2m"
+    },
+    {
+      "name": "server",
+      "when": {
+        "error": "\\b(500|502|503|504|520|524|529)\\b|overloaded|server[\\s_-]*error|internal[\\s_-]*error|bad gateway|service[\\s_-]*unavailable|upstream|负载已饱和"
+      },
+      "action": "resend"
+    },
+    {
+      "name": "network",
+      "when": {
+        "error": "connection|network|econnreset|econnrefused|etimedout|socket hang up|fetch failed|timed? ?out|terminated"
+      },
+      "action": "resend"
+    },
+    {
+      "name": "fallback",
+      "action": "message",
+      "prompt": "上一步出错了（{error}），接着做",
+      "maxRetries": 3,
+      "maxSameError": 2
+    }
   ]
 }
 ```
@@ -183,7 +232,9 @@ pi 自带的重试（`settings.json` 的 `retry`）先跑，它只处理瞬时�
 ```json
 {
   "subagents": {
-    "defaultSubagentOnlyExtensions": ["~/.pi/agent/git/github.com/cobia68/pi-onward/src/extension/index.ts"]
+    "defaultSubagentOnlyExtensions": [
+      "~/.pi/agent/git/github.com/cobia68/pi-onward/src/extension/index.ts"
+    ]
   }
 }
 ```
