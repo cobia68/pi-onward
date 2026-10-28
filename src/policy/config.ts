@@ -1,28 +1,29 @@
 /**
- * 设置文件的模型：
+ * 设置文件的模型：顶层写的参数就是每条规则的默认值，规则里同名的字段覆盖它。
  *
  * ```jsonc
  * {
  *   "enabled": true,
- *   "defaults": { "mode": "message", "maxRetries": 10 },   // 规则没写的参数用它
- *   "rules": [{ "name": "auth", "when": { "match": "401" }, "then": { "mode": "silent" }, "budget": { "maxRetries": 20 } }]
+ *   "action": "message", "maxRetries": 10,
+ *   "rules": [{ "name": "auth", "when": { "error": "401" }, "action": "resend", "maxRetries": 20 }]
  * }
  * ```
  */
 import { isRecord } from "../util.ts";
 import { type Failure, isFailure } from "./failure.ts";
-import { type Policy, type PolicyPatch, parsePolicyPatch, resolvePolicy } from "./policy.ts";
+import { FIELD_NAMES, type Policy, type PolicyPatch, readParams, resolvePolicy } from "./policy.ts";
 import { findRule, parseRules, type Rule } from "./rules.ts";
 
 export interface Config {
 	enabled: boolean;
+	/** 顶层的参数：规则没写的字段用它。 */
 	defaults: PolicyPatch;
 	rules: Rule[];
-	/** 校验时丢掉或忽略的内容，给 `/onward rules` 看。 */
+	/** 校验时丢掉或忽略的内容，给 `/onward show` 看。 */
 	problems: string[];
 }
 
-const CONFIG_KEYS = new Set(["$schema", "enabled", "defaults", "rules"]);
+const CONFIG_KEYS = new Set(["$schema", "enabled", "rules", ...FIELD_NAMES]);
 
 /** 坏掉的部分丢掉并记问题，不抛。 */
 export function parseConfig(raw: unknown): Config {
@@ -30,19 +31,21 @@ export function parseConfig(raw: unknown): Config {
 	if (!isRecord(raw)) return emptyConfig(["设置文件不是对象，已忽略"]);
 	const problems: string[] = [];
 	if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") problems.push("enabled 需要 true 或 false");
-	const defaults = parsePolicyPatch(raw.defaults, "defaults", problems);
+	const defaults = readParams(raw, problems);
 	const rules = parseRules(raw.rules, problems);
 	for (const key of Object.keys(raw)) if (!CONFIG_KEYS.has(key)) problems.push(`${key} 不认识，已忽略`);
 	return { enabled: raw.enabled !== false, defaults, rules, problems };
 }
 
-/** 旧版 `auto-continue.json` 是扁平字段，除 enabled 外都当 defaults。只迁参数，不替它生成规则。 */
-export function migrateLegacy(raw: unknown): Config {
-	if (!isRecord(raw)) return emptyConfig(["旧设置文件不是对象，已忽略"]);
-	const { enabled, ...rest } = raw;
-	const problems: string[] = [];
-	const defaults = parsePolicyPatch(rest, "auto-continue.json", problems);
-	return { enabled: enabled !== false, defaults, rules: [], problems };
+/** 写回设置文件时的键顺序：`$schema`、`enabled`、参数、其他、`rules`。 */
+export function fileOrder(raw: Record<string, unknown>): Record<string, unknown> {
+	const first = ["$schema", "enabled", ...FIELD_NAMES];
+	const keys = [
+		...first.filter((key) => key in raw),
+		...Object.keys(raw).filter((key) => !first.includes(key) && key !== "rules"),
+		...("rules" in raw ? ["rules"] : []),
+	];
+	return Object.fromEntries(keys.map((key) => [key, raw[key]]));
 }
 
 /** 一次失败命中了哪条规则，按什么参数处理。 */

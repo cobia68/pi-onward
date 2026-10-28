@@ -6,11 +6,12 @@ import { retryDelay } from "./delay.ts";
 import { errorSignature, type Failure } from "./failure.ts";
 import type { Policy } from "./policy.ts";
 
-export type StopReason = "no-retries" | "same-error" | "budget";
+/** 为什么不再续跑：规则说停、同一个错误太多次、次数用完。 */
+export type GiveUpReason = "stop" | "same-error" | "budget";
 
 export type Retry = { retry: true; attempt: number; delay: number };
-export type Stop = { retry: false; reason: StopReason; attempt: number; streak: number; notify: boolean };
-export type Step = Retry | Stop;
+export type GiveUp = { retry: false; reason: GiveUpReason; attempt: number; streak: number; notify: boolean };
+export type Step = Retry | GiveUp;
 
 /** 这一串失败里一共续跑了几次，同一个错误连续几次。 */
 export interface Progress {
@@ -30,7 +31,7 @@ export class Tracker {
 		this.streak = signature === this.signature ? this.streak + 1 : 1;
 		this.signature = signature;
 		const used = this.attempts.get(ruleName) ?? 0;
-		const reason = stopReason(used, this.streak, policy);
+		const reason = giveUpReason(used, this.streak, policy);
 		if (reason) {
 			// 停手只提醒一次，恢复之前再撞到也不刷屏。
 			const notify = !this.warned;
@@ -38,7 +39,7 @@ export class Tracker {
 			return { retry: false, reason, attempt: used, streak: this.streak, notify };
 		}
 		this.attempts.set(ruleName, used + 1);
-		return { retry: true, attempt: used + 1, delay: retryDelay(used + 1, policy) };
+		return { retry: true, attempt: used + 1, delay: retryDelay(used + 1, policy.delay) };
 	}
 
 	reset(): void {
@@ -55,9 +56,9 @@ export class Tracker {
 	}
 }
 
-function stopReason(used: number, streak: number, policy: Policy): StopReason | undefined {
-	if (policy.maxRetries === 0) return "no-retries";
-	if (streak > policy.sameErrorLimit) return "same-error";
+function giveUpReason(used: number, streak: number, policy: Policy): GiveUpReason | undefined {
+	if (policy.action === "stop") return "stop";
+	if (streak > policy.maxSameError) return "same-error";
 	if (used >= policy.maxRetries) return "budget";
 	return undefined;
 }

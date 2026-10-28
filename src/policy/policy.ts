@@ -1,83 +1,151 @@
-/** 一条规则怎么续跑：方式、次数、间隔、同错上限，以及这些参数的校验。 */
-import { isRecord } from "../util.ts";
-import { type DelayPolicy, MAX_DELAY_MS } from "./delay.ts";
+/**
+ * 续跑的参数：一张字段表，设置文件、规则、命令、帮助和补全都用它。设置文件顶层写的就是每条规则的默认值，
+ * 规则里同名的字段覆盖它。
+ */
+import { DELAY_SYNTAX, type Delay, delayText, parseDelay } from "./delay.ts";
 
-/** `message` 发一条用户消息；`silent` 从上下文里省略失败的那条，再重发同一个请求。 */
-export type Mode = "message" | "silent";
+/** message 发一条看得见的消息再接着跑；resend 从上下文里省略失败的那条，重发同一个请求；stop 不续跑，只提醒。 */
+export type Action = "message" | "resend" | "stop";
 
-export interface Policy extends DelayPolicy {
-	mode: Mode;
-	/** message 模式发的消息，可含 {attempt} {max} {error} {rule}。 */
+export interface Policy {
+	action: Action;
+	/** message 发的消息，可含 {attempt} {max} {error} {rule}。 */
 	prompt: string;
-	/** 连续失败时最多续跑几次，正常返回一次就从头算；0 表示命中就停、只提醒。 */
+	/** 连续失败时最多续跑几次，正常返回一次就从头算。 */
 	maxRetries: number;
-	/** 同一个错误连续出现超过这么多次就彻底停。 */
-	sameErrorLimit: number;
+	/** 同一个错误最多续跑几次：连续出现超过这么多次就彻底停。 */
+	maxSameError: number;
+	delay: Delay;
 }
 
 export type PolicyPatch = Partial<Policy>;
 
-export const DEFAULT_POLICY: Readonly<Policy> = Object.freeze({
-	mode: "message",
+export interface Field<K extends keyof Policy = keyof Policy> {
+	name: K;
+	/** 帮助里的写法。 */
+	syntax: string;
+	description: string;
+	/** 补全的候选值。 */
+	choices?: readonly { value: string; description: string }[];
+	/** 规则里读不懂时整条规则丢掉：读错它可能多发真实请求。这样的字段排在字段表最前面。 */
+	failClosed?: boolean;
+	/** 设置文件里的值；合法时返回 value，否则返回原因。 */
+	read(value: unknown): { value: Policy[K] } | { problem: string };
+	/** 命令里的文字 → 设置文件里的值。 */
+	fromText(text: string): unknown;
+	/** 给人看的值。 */
+	show(value: Policy[K]): string;
+}
+
+const ACTIONS: readonly { value: Action; description: string }[] = [
+	{ value: "message", description: "发一条看得见的消息再接着跑" },
+	{ value: "resend", description: "静默重发同一个请求" },
+	{ value: "stop", description: "不续跑，只提醒" },
+];
+
+const field = <K extends keyof Policy>(spec: Field<K>): Field<K> => spec;
+
+export const FIELDS: readonly Field[] = [
+	field({
+		name: "action",
+		syntax: ACTIONS.map((item) => item.value).join(" | "),
+		description: "怎么续跑",
+		choices: ACTIONS,
+		failClosed: true,
+		read: (v) =>
+			ACTIONS.some((item) => item.value === v)
+				? { value: v as Action }
+				: { problem: "只能是 message、resend 或 stop" },
+		fromText: (text) => text,
+		show: String,
+	}),
+	field({
+		name: "prompt",
+		syntax: "文字",
+		description: "message 发的消息，可含 {attempt} {max} {error} {rule}",
+		read: (v) =>
+			typeof v === "string" && v.trim() && v.trim().length <= 500
+				? { value: v.trim() }
+				: { problem: "需要 1–500 字的文字" },
+		fromText: (text) => text,
+		show: (prompt) => `「${prompt}」`,
+	}),
+	field({
+		name: "maxRetries",
+		syntax: "1–50",
+		description: "连续失败时最多续跑几次",
+		read: (v) => integer(v, 1, 50),
+		fromText: number,
+		show: String,
+	}),
+	field({
+		name: "maxSameError",
+		syntax: "1–100",
+		description: "同一个错误最多续跑几次，再出现就彻底停",
+		read: (v) => integer(v, 1, 100),
+		fromText: number,
+		show: String,
+	}),
+	field({
+		name: "delay",
+		syntax: DELAY_SYNTAX,
+		description: "列表按顺序等，最后一个值重复；起步..封顶按次数增长",
+		read: (v) => {
+			const delay = typeof v === "string" ? parseDelay(v) : `写成 ${DELAY_SYNTAX}`;
+			return typeof delay === "string" ? { problem: delay } : { value: delay };
+		},
+		fromText: (text) => text,
+		show: delayText,
+	}),
+];
+
+export const FIELD_NAMES: readonly string[] = FIELDS.map((item) => item.name);
+
+export function fieldNamed(name: string): Field | undefined {
+	return FIELDS.find((item) => item.name.toLowerCase() === name.toLowerCase());
+}
+
+export const DEFAULT_POLICY: Readonly<Policy> = Object.freeze<Policy>({
+	action: "message",
 	prompt: "继续",
 	maxRetries: 10,
-	sameErrorLimit: 10,
-	retryDelaysMs: [],
-	retryBaseMs: 3_000,
-	retryCapMs: 15_000,
+	maxSameError: 10,
+	delay: { kind: "ramp", step: 3_000, cap: 15_000 },
 });
 
-/** 内置默认值 ← 设置里的 defaults ← 规则自己的参数。 */
+/** 内置默认值 ← 设置文件顶层 ← 规则自己的字段。 */
 export function resolvePolicy(defaults: PolicyPatch, rule: PolicyPatch = {}): Policy {
 	return { ...DEFAULT_POLICY, ...defaults, ...rule };
 }
 
-interface Field {
-	expect: string;
-	/** 合法时返回（夹到范围内的）值，否则 undefined。 */
-	parse(value: unknown): unknown;
+/**
+ * 设置文件顶层的参数：合法的收下，不合法的丢掉并记问题（不夹到范围内）；不是参数的键交给调用方。
+ */
+export function readParams(raw: Record<string, unknown>, problems: string[]): PolicyPatch {
+	return read(raw, "", problems, false) as PolicyPatch;
 }
 
-const FIELDS: Record<keyof Policy, Field> = {
-	mode: {
-		expect: "只能是 message 或 silent",
-		parse: (v) => (v === "message" || v === "silent" ? v : undefined),
-	},
-	prompt: {
-		expect: "需要非空字符串",
-		parse: (v) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 500) : undefined),
-	},
-	maxRetries: { expect: "需要数字", parse: (v) => clampInt(v, 0, 50) },
-	sameErrorLimit: { expect: "需要数字", parse: (v) => clampInt(v, 1, 100) },
-	retryBaseMs: { expect: "需要数字（毫秒）", parse: (v) => clampInt(v, 0, MAX_DELAY_MS) },
-	retryCapMs: { expect: "需要数字（毫秒）", parse: (v) => clampInt(v, 0, MAX_DELAY_MS) },
-	retryDelaysMs: {
-		expect: "需要数组（毫秒）",
-		parse: (v) =>
-			Array.isArray(v)
-				? v
-						.filter((ms): ms is number => isNumber(ms) && ms >= 0)
-						.slice(0, 20)
-						.map((ms) => Math.min(Math.round(ms), MAX_DELAY_MS))
-				: undefined,
-	},
-};
+/** 一条规则的参数，同上；读不懂 failClosed 的字段时整条规则丢掉，返回 undefined。`where` 如 `rules[2]（auth）.`。 */
+export function readRuleParams(
+	raw: Record<string, unknown>,
+	where: string,
+	problems: string[],
+): PolicyPatch | undefined {
+	return read(raw, where, problems, true);
+}
 
-/** 只留下认得、合法的参数，数值夹到范围内；坏值丢掉并记一条问题。 */
-export function parsePolicyPatch(raw: unknown, where: string, problems: string[] = []): PolicyPatch {
-	if (raw === undefined) return {};
-	if (!isRecord(raw)) {
-		problems.push(`${where} 不是对象，已忽略`);
-		return {};
-	}
+function read(raw: Record<string, unknown>, where: string, problems: string[], rule: boolean): PolicyPatch | undefined {
 	const patch: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(raw)) {
-		const field = Object.hasOwn(FIELDS, key) ? FIELDS[key as keyof Policy] : undefined;
-		const parsed = field?.parse(value);
-		if (parsed !== undefined) patch[key] = parsed;
-		else problems.push(field ? `${where}.${key} ${field.expect}` : `${where}.${key} 不认识，已忽略`);
+	for (const item of FIELDS) {
+		if (!Object.hasOwn(raw, item.name)) continue;
+		const result = item.read(raw[item.name]);
+		if ("value" in result) patch[item.name] = result.value;
+		else if (rule && item.failClosed) {
+			problems.push(`${where}${item.name} ${result.problem}，已丢弃`);
+			return undefined;
+		} else problems.push(`${where}${item.name} ${result.problem}，已忽略`);
 	}
-	return patch as PolicyPatch;
+	return patch;
 }
 
 export interface PromptVars {
@@ -92,10 +160,13 @@ export function renderPrompt(template: string, vars: PromptVars): string {
 	return template.replace(/\{(attempt|max|error|rule)\}/g, (_, key: keyof PromptVars) => String(vars[key]));
 }
 
-function isNumber(value: unknown): value is number {
-	return typeof value === "number" && Number.isFinite(value);
+function integer(value: unknown, min: number, max: number): { value: number } | { problem: string } {
+	return Number.isInteger(value) && (value as number) >= min && (value as number) <= max
+		? { value: value as number }
+		: { problem: `需要 ${min}–${max} 的整数` };
 }
 
-function clampInt(value: unknown, min: number, max: number): number | undefined {
-	return isNumber(value) ? Math.min(max, Math.max(min, Math.trunc(value))) : undefined;
+/** 不是数字的文字原样交给 read，由它说明要什么。 */
+function number(text: string): unknown {
+	return /^-?\d+(?:\.\d+)?$/.test(text) ? Number(text) : text;
 }

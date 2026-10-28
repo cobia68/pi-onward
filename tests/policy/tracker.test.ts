@@ -6,7 +6,7 @@ import { err } from "../support/fake-pi.ts";
 
 test("同一个错误连续超过上限就停，只提醒一次；换错误重新数", () => {
 	const tracker = new Tracker();
-	const policy = resolvePolicy({ sameErrorLimit: 3 });
+	const policy = resolvePolicy({ maxSameError: 3 });
 	for (let i = 1; i <= 3; i++) assert.equal(tracker.next("r", err(), policy).retry, true);
 	assert.equal(tracker.next("r", err("429"), policy).retry, true, "换错误不停");
 	for (let i = 1; i <= 3; i++) assert.equal(tracker.next("r", err(), policy).retry, true);
@@ -38,7 +38,7 @@ test("每条规则各自的次数上限", () => {
 	assert.deepEqual(tracker.progress(), { used: 3, streak: 1 });
 });
 
-test("次数为 0：命中就停", () => {
-	const step = new Tracker().next("quota", err(), resolvePolicy({ maxRetries: 0 }));
-	assert.equal(!step.retry && step.reason, "no-retries");
+test("action=stop：命中就停", () => {
+	const step = new Tracker().next("quota", err(), resolvePolicy({ action: "stop" }));
+	assert.equal(!step.retry && step.reason, "stop");
 });

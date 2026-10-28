@@ -1,7 +1,7 @@
 /**
  * 一轮以错误收尾、命中规则时，在 `agent_before_settle` 边界上等一会儿，再要 pi 接着跑：
  *  - message：追加一条看得见的消息（默认「继续」），模型照常读到；
- *  - silent：用 `context_edit` 把失败的那条从模型上下文里省略，重发同一个请求。失败的记录仍留在会话里。
+ *  - resend：用 `context_edit` 把失败的那条从模型上下文里省略，重发同一个请求。失败的记录仍留在会话里。
  *
  * 等待和续跑都在这一轮之内完成，不靠落定后的定时器，所以 `pi -p`、RPC、subagent 子会话里一样生效。
  */
@@ -17,9 +17,17 @@ import { isSuccess } from "../policy/failure.ts";
 import { renderPrompt } from "../policy/policy.ts";
 import { type Progress, type Retry, Tracker } from "../policy/tracker.ts";
 import type { Settings } from "./settings.ts";
-import { errorExcerpt, retryNotice, say, stopNotice } from "./text.ts";
+import { errorExcerpt, giveUpNotice, giveUpStatus, retryNotice, retryStatus, say } from "./text.ts";
 
-type Ctx = Pick<ExtensionContext, "sessionManager">;
+type Ctx = Pick<ExtensionContext, "sessionManager" | "hasUI" | "ui">;
+
+/** 状态栏里本扩展的那一格。 */
+const STATUS_KEY = "pi-onward";
+
+/** 怎么接着跑：resend 省略失败的那条重发，message 追加一条文字消息。 */
+export type Continue =
+	| Extract<SessionBoundaryDraft, { type: "context_edit" }>
+	| (Extract<SessionBoundaryDraft, { type: "custom_message" }> & { content: string });
 
 /**
  * 每个会话由哪个实例负责。同一个会话装了两份（例如 subagent 既按包加载、又按路径加载了一份副本），
@@ -40,6 +48,11 @@ export class Onward {
 	private continuing = false;
 	/** 正在等待的那次续跑；关掉、恢复默认、会话结束时打断它。 */
 	private waiting: AbortController | undefined;
+	/**
+	 * 状态栏里写着什么：retrying 是第几次续跑，这一轮结束就清掉；gave-up 是停了，留到恢复或用户发新消息。
+	 * 只有干活的那份会写，所以清的时候不用再问是谁的。
+	 */
+	private statusBar: "retrying" | "gave-up" | undefined;
 
 	constructor(settings: Settings) {
 		this.settings = settings;
@@ -47,13 +60,13 @@ export class Onward {
 
 	agentStart(ctx: Ctx): void {
 		if (!this.owns(ctx)) return;
-		if (!this.continuing) this.tracker.reset();
+		if (!this.continuing) this.reset(ctx);
 		this.continuing = false;
 	}
 
 	messageEnd(event: MessageEndEvent, ctx: Ctx): void {
 		// 续跑之后只要正常返回过一次就算恢复了：后面再出错是新的一串，次数从头算。
-		if (this.owns(ctx) && isSuccess(event.message)) this.tracker.reset();
+		if (this.owns(ctx) && isSuccess(event.message)) this.reset(ctx);
 	}
 
 	/** 等待期间这一轮仍算忙：按 Esc 打断等待；用户输入的消息优先，我们让路。 */
@@ -70,37 +83,41 @@ export class Onward {
 		if (!entry || !hit) return undefined;
 		const step = this.advance(hit, ctx);
 		if (!step) return undefined;
-		const prompt = hit.policy.mode === "message" ? this.prompt(hit, step) : undefined;
-		say(ctx, retryNotice(hit, step, prompt));
+		const draft: Continue =
+			hit.policy.action === "resend"
+				? { type: "context_edit", targetId: entry.sourceEntry.id, replacement: null }
+				: { type: "custom_message", customType: "pi-onward", content: this.prompt(hit, step), display: true };
+		say(ctx, retryNotice(hit, step, draft));
+		this.setStatus(ctx, "retrying", retryStatus(hit, step));
 		if (await this.wait(step.delay, ctx.signal)) return undefined;
 		// 等的时候用户发了消息：pi 会接着处理它，这算用户开的新一轮。
 		if (ctx.hasPendingMessages()) {
-			this.tracker.reset();
+			this.reset(ctx);
 			return undefined;
 		}
-		const draft: SessionBoundaryDraft =
-			prompt === undefined
-				? { type: "context_edit", targetId: entry.sourceEntry.id, replacement: null }
-				: { type: "custom_message", customType: "pi-onward", content: prompt, display: true };
 		this.continuing = true;
 		// 边界结果会整体替换前面扩展提出的条目，所以带上它们。
 		return { entries: [...event.entries, draft], continue: true };
 	}
 
-	/** 这一轮彻底结束了；pi 不接受续跑时，`continuing` 不能留到下一轮。 */
-	settled(): void {
+	/**
+	 * 这一轮彻底结束了；pi 不接受续跑时，`continuing` 不能留到下一轮。没有接着跑（按了 Esc、错误没命中规则），
+	 * 「第几次」就不再成立；停了的提示留着。
+	 */
+	settled(ctx: Ctx): void {
 		this.continuing = false;
+		if (this.statusBar === "retrying") this.setStatus(ctx, undefined);
 	}
 
 	/** 关掉、恢复默认时：打断正在等的续跑，清零计数。 */
-	stop(): void {
+	stop(ctx: Ctx): void {
 		this.waiting?.abort();
-		this.tracker.reset();
+		this.reset(ctx);
 		this.continuing = false;
 	}
 
 	shutdown(ctx: Ctx): void {
-		this.stop();
+		this.stop(ctx);
 		const session = ctx.sessionManager.getSessionId();
 		if (owners.get(session) === this) owners.delete(session);
 	}
@@ -120,8 +137,21 @@ export class Onward {
 	private advance(hit: Hit, ctx: ExtensionContext): Retry | undefined {
 		const step = this.tracker.next(hit.rule.name, hit.failure, hit.policy);
 		if (step.retry) return step;
-		if (step.notify) say(ctx, stopNotice(hit, step));
+		if (step.notify) say(ctx, giveUpNotice(hit, step));
+		this.setStatus(ctx, "gave-up", giveUpStatus(hit, step));
 		return undefined;
+	}
+
+	/** 计数从头算，状态栏也清掉。 */
+	private reset(ctx: Ctx): void {
+		this.tracker.reset();
+		if (this.statusBar !== undefined) this.setStatus(ctx, undefined);
+	}
+
+	/** 没有界面（`pi -p`、RPC）时不写。 */
+	private setStatus(ctx: Ctx, status: "retrying" | "gave-up" | undefined, text?: string): void {
+		this.statusBar = status;
+		if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, text);
 	}
 
 	private prompt(hit: Hit, step: Retry): string {

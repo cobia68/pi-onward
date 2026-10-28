@@ -7,13 +7,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerCommand } from "./command.ts";
 import { Onward } from "./onward.ts";
-import { defaultPaths, Settings } from "./settings.ts";
-import { LEGACY_COMMAND, say, startupNotices } from "./text.ts";
+import { defaultPath, Settings } from "./settings.ts";
+import { say, startupNotices } from "./text.ts";
 
 export interface OnwardOptions {
 	configPath?: string;
-	/** 旧版 `auto-continue.json`；传 false 不读。 */
-	legacyPath?: string | false;
 }
 
 export default function piOnward(pi: ExtensionAPI): void {
@@ -21,19 +19,16 @@ export default function piOnward(pi: ExtensionAPI): void {
 }
 
 export function install(pi: ExtensionAPI, options: OnwardOptions = {}): void {
-	const defaults = defaultPaths();
-	const legacyPath = options.legacyPath === false ? undefined : (options.legacyPath ?? defaults.legacyPath);
-	const settings = new Settings(options.configPath ?? defaults.path, legacyPath);
+	const settings = new Settings(options.configPath ?? defaultPath());
 	const onward = new Onward(settings);
 
 	pi.on("session_start", (_event, ctx) => {
-		const legacyInstalled = pi.getCommands().some((command) => command.name === LEGACY_COMMAND);
-		for (const notice of startupNotices(settings, legacyInstalled)) say(ctx, notice);
+		for (const notice of startupNotices(settings)) say(ctx, notice);
 	});
 	pi.on("agent_start", (_event, ctx) => onward.agentStart(ctx));
 	pi.on("message_end", (event, ctx) => onward.messageEnd(event, ctx));
 	pi.on("agent_before_settle", (event, ctx) => onward.beforeSettle(event, ctx));
-	pi.on("agent_settled", () => onward.settled());
+	pi.on("agent_settled", (_event, ctx) => onward.settled(ctx));
 	pi.on("session_shutdown", (_event, ctx) => onward.shutdown(ctx));
 
 	registerCommand(pi, settings, onward);

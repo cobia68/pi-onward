@@ -1,51 +1,17 @@
 {
   "enabled": true,
-  "defaults": {
-    "mode": "message",
-    "prompt": "继续",
-    "maxRetries": 10,
-    "sameErrorLimit": 10,
-    "retryBaseMs": 3000,
-    "retryCapMs": 15000,
-    "retryDelaysMs": []
-  },
+  "action": "message",
+  "prompt": "继续",
+  "maxRetries": 10,
+  "maxSameError": 10,
+  "delay": "3s..15s",
   "rules": [
-    {
-      "name": "quota",
-      "when": { "match": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|usage limit|余额不足|额度不足|额度已用尽" },
-      "budget": { "maxRetries": 0 }
-    },
-    {
-      "name": "context-overflow",
-      "when": { "match": "context[\\s_-]*(length|window)|prompt (is )?too long|maximum context|request_too_large" },
-      "budget": { "maxRetries": 0 }
-    },
-    {
-      "name": "auth",
-      "when": { "match": "\\b401\\b|unauthorized|authentication|invalid[\\s_-]*(x-)?(api[\\s_-]*)?(key|token)" },
-      "then": { "mode": "silent" },
-      "budget": { "maxRetries": 20, "retryCapMs": 10000 }
-    },
-    {
-      "name": "rate-limit",
-      "when": { "match": "\\b429\\b|rate[\\s_-]*limit|too many requests|resource[\\s_-]*exhausted" },
-      "then": { "mode": "silent" },
-      "budget": { "maxRetries": 5, "retryDelaysMs": [30000, 60000, 120000] }
-    },
-    {
-      "name": "server",
-      "when": { "match": "\\b(500|502|503|504|520|524|529)\\b|overloaded|server[\\s_-]*error|internal[\\s_-]*error|bad gateway|service[\\s_-]*unavailable|upstream|负载已饱和" },
-      "then": { "mode": "silent" }
-    },
-    {
-      "name": "network",
-      "when": { "match": "connection|network|econnreset|econnrefused|etimedout|socket hang up|fetch failed|timed? ?out|terminated" },
-      "then": { "mode": "silent" }
-    },
-    {
-      "name": "fallback",
-      "then": { "mode": "message", "prompt": "上一步出错了（{error}），接着做" },
-      "budget": { "maxRetries": 3, "sameErrorLimit": 2 }
-    }
+    { "name": "quota", "when": { "error": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|usage limit|余额不足|额度不足|额度已用尽" }, "action": "stop" },
+    { "name": "context-overflow", "when": { "error": "context[\\s_-]*(length|window)|prompt (is )?too long|maximum context|request_too_large" }, "action": "stop" },
+    { "name": "auth", "when": { "error": "\\b401\\b|unauthorized|authentication|invalid[\\s_-]*(x-)?(api[\\s_-]*)?(key|token)" }, "action": "resend", "maxRetries": 20, "delay": "3s..10s" },
+    { "name": "rate-limit", "when": { "error": "\\b429\\b|rate[\\s_-]*limit|too many requests|resource[\\s_-]*exhausted" }, "action": "resend", "maxRetries": 5, "delay": "30s,1m,2m" },
+    { "name": "server", "when": { "error": "\\b(500|502|503|504|520|524|529)\\b|overloaded|server[\\s_-]*error|internal[\\s_-]*error|bad gateway|service[\\s_-]*unavailable|upstream|负载已饱和" }, "action": "resend" },
+    { "name": "network", "when": { "error": "connection|network|econnreset|econnrefused|etimedout|socket hang up|fetch failed|timed? ?out|terminated" }, "action": "resend" },
+    { "name": "fallback", "action": "message", "prompt": "上一步出错了（{error}），接着做", "maxRetries": 3, "maxSameError": 2 }
   ]
 }

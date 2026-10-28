@@ -32,60 +32,60 @@ pi install ./pi-onward
 
 重开 pi 或输入 `/reload`，再输入 `/onward`：看到「onward：开，没有可用的规则…」就是装好了。这时出错还不会续跑：把仓库里的 [`example.json`](example.json) 复制成 `~/.pi/agent/onward.json`（已有的话先备份），再 `/onward reload`。它的规则就是下面的[常见规则](#-常见规则)。
 
-> [!WARNING]
-> 以前用过单文件的 `~/.pi/agent/extensions/auto-continue.ts`，要先删掉它。两个同时装，出错时会各续跑一次；插件启动时发现 `/auto-continue` 还在会提醒。旧的 `auto-continue.json` 会被自动读进来，见[从 auto-continue 迁移](#从-auto-continue-迁移)。
-
 ## ⚙️ 工作方式
 
-一轮收尾时，最后一条助手消息是 `stopReason: "error"`、并且命中了一条规则，才处理；按 Esc 结束的（`aborted`）、正常结束的、没命中规则的都不碰。下面的方式、上限、间隔都是规则的参数，规则没写的取 `defaults`。
+一轮收尾时，最后一条助手消息是 `stopReason: "error"`、并且命中了一条规则，才处理；按 Esc 结束的（`aborted`）、正常结束的、没命中规则的都不碰。下面的动作、上限、间隔都是参数：设置文件顶层写的是默认值，规则里同名的字段覆盖它。
 
-两种方式都在 pi 的收尾边界 `agent_before_settle` 上等一会儿，再用 `continue: true` 让这一轮接着跑。等待和续跑都在这一轮之内，所以交互、`pi -p`、RPC、[subagent 子会话](#-常见问题)里行为一样。
+续跑都在 pi 的收尾边界 `agent_before_settle` 上等一会儿，再用 `continue: true` 让这一轮接着跑。等待和续跑都在这一轮之内，所以交互、`pi -p`、RPC、[subagent 子会话](#-常见问题)里行为一样。
 
-| 方式 | 做法 | 留下什么 |
+| `action` | 做法 | 留下什么 |
 | :--- | :--- | :------- |
 | `message`（默认） | 追加一条消息（默认「继续」）再接着跑 | 会话里多一条看得见的扩展消息，模型把它当用户消息读 |
-| `silent` | 用 `context_edit` 把失败的那条从模型上下文里省略，重发同一个请求 | 不写消息；原始记录里还留着失败的那次和一条不可见的 `context_edit` |
+| `resend` | 用 `context_edit` 把失败的那条从模型上下文里省略，重发同一个请求 | 不写消息；原始记录里还留着失败的那次和一条不可见的 `context_edit` |
+| `stop` | 不续跑，只提醒一次；后面的规则也不再看 | 什么都不留 |
+
+状态栏写着进度：续跑时是「⏩ 续跑 2/10 · auth」（第几次、最多几次、哪条规则），停了是「⏩ 续跑已停 · auth」或「⏩ 不续跑 · quota」；恢复、或者你发新消息时清掉。没有界面（`pi -p`、RPC）时不写。
 
 等待期间这一轮还算忙，和 pi 自带的重试一样：按 Esc 打断等待，不再续跑；等待时输入的消息优先，pi-onward 让路，由 pi 接着处理你的消息；`/onward off` 也会立刻打断。
 
 **上限**（每次续跑都是真实请求）：
 
 - 连续失败时，每条规则最多续跑 `maxRetries` 次，默认 10。
-- 同一个错误连续出现超过 `sameErrorLimit` 次就彻底停，默认 10，也就是第 11 次时停。是不是同一个错误按归一化后的错误文案判断：大小写、空白、`request id`、UUID、长数字、长十六进制串都不算差异。换了错误就重新数。
+- 同一个错误最多续跑 `maxSameError` 次，默认 10：再出现就彻底停。是不是同一个错误按归一化后的错误文案判断：大小写、空白、`request id`、UUID、长数字、长十六进制串都不算差异。换了错误就重新数。
 - 停手只提醒一次。
 
-**间隔**：默认按次数增长并封顶，第 n 次等 `min(3 秒 × n, 15 秒)`，即 3 → 6 → 9 → 12 → 15 → 15 … 秒，10 次合计 2 分钟。也可以写死一份列表。
+**间隔** `delay`，每个值都带单位（`ms`、`s`、`m`）：
+
+- `3s..15s`（默认）：按次数增长并封顶，第 n 次等 `min(3 秒 × n, 15 秒)`，即 3 → 6 → 9 → 12 → 15 → 15 … 秒，10 次合计 2 分钟。
+- `30s,1m,2m`：按列表来，最后一个值重复。
 
 **计数清零**：续跑之后助手正常返回过一次（包括中间的工具轮）就算恢复，次数和同错计数都从头算；一轮正常结束、按 Esc、用户自己发起新一轮也清零。所以上限管的是「连着失败」，不是一轮里的总次数：只要每次续跑后都有进展，就会一直续下去。
 
 ## 📝 设置文件
 
-`~/.pi/agent/onward.json`（环境变量 `PI_ONWARD_CONFIG` 可改路径）。没有这个文件、或者里面没有可用的规则，出错时什么都不做，启动时提醒一句。`/onward` 命令只改 `enabled` 和 `defaults`，`rules` 要手写，改完 `/onward reload`。
+`~/.pi/agent/onward.json`（环境变量 `PI_ONWARD_CONFIG` 可改路径）。没有这个文件、或者里面没有可用的规则，出错时什么都不做，启动时提醒一句。`/onward` 命令只改 `enabled` 和顶层的参数，`rules` 要手写，改完 `/onward reload`。
 
-下面是全部字段的说明。`//` 注释只为说明，真实文件是纯 JSON，不能写注释；可以直接复制的见[常见规则](#-常见规则)。
+顶层写的参数就是每条规则的默认值，规则里只写和顶层不同的字段。下面是全部字段的说明，`//` 注释只为说明，真实文件是纯 JSON，不能写注释；可以直接复制的见[常见规则](#-常见规则)。
 
 ```jsonc
 {
-  "enabled": true,
-  "defaults": {
-    "mode": "message",          // message | silent
-    "prompt": "继续",            // message 模式发的消息
-    "maxRetries": 10,           // 0–50
-    "sameErrorLimit": 10,       // 1–100
-    "retryBaseMs": 3000,        // 按次数增长：第 n 次等 min(base × n, cap)
-    "retryCapMs": 15000,
-    "retryDelaysMs": []         // 非空时按列表来，最后一个值重复；优先于 base/cap
-  },
+  "enabled": true,              // 插件开关；不是默认值
+  "action": "message",          // message | resend | stop
+  "prompt": "继续",              // message 发的消息
+  "maxRetries": 10,             // 1–50
+  "maxSameError": 10,           // 1–100
+  "delay": "3s..15s",           // 或 "5s,10s,30s"
   "rules": [
     {
       "name": "relay-auth",
-      "when": { "match": "401|invalid\\s*(api\\s*)?(key|token)", "provider": "welfare-*" },
-      "then": { "action": "continue", "mode": "silent" },
-      "budget": { "maxRetries": 20, "retryCapMs": 10000 }
+      "when": { "error": "401|invalid\\s*(api\\s*)?(key|token)", "provider": "welfare-*" },
+      "action": "resend",
+      "maxRetries": 20,
+      "delay": "3s..10s"
     },
     {
       "name": "everything-else",
-      "then": { "prompt": "上一步出错了（{error}），接着做，第 {attempt}/{max} 次" }
+      "prompt": "上一步出错了（{error}），接着做，第 {attempt}/{max} 次"
     }
   ]
 }
@@ -93,85 +93,48 @@ pi install ./pi-onward
 
 ### 规则
 
-一条规则由三部分组成：`when` 是条件，`then` 是动作，`budget` 是预算。
+一条规则由条件 `when` 和参数组成，参数的名字和顶层一样。
 
-- **没有内置规则**。没写 `rules`、或者写的全被丢掉，出错时什么都不做。`defaults` 只是规则没写的参数的默认值，本身不会触发续跑。
+- **没有内置规则**。没写 `rules`、或者写的全被丢掉，出错时什么都不做。顶层的参数只是规则没写时的默认值，本身不会触发续跑。
 - 按顺序第一条命中的生效，**没命中的错误不处理**。想兜底就在最后放一条不带 `when` 的规则。
-- `budget.maxRetries: 0` 的规则命中就停、只提醒，也挡住后面的兜底。适合额度用完这类重试没用的错误。
+- `"action": "stop"` 的规则命中就停、只提醒，也挡住后面的兜底。适合额度用完这类重试没用的错误。
 - `enabled: false` 的规则保留但跳过。
 - 每条规则有自己的续跑次数；「同一个错误连续几次」是全局的，但用的是当前命中规则的上限。
 
 | 字段 | 说明 |
 | :--- | :--- |
 | `name` | 规则名，出现在通知里；不写时按位置叫 `rule-1`、`rule-2` |
-| `when.match` | 正则，大小写不敏感，对原始错误文案匹配 |
+| `enabled` | `false` 时保留但跳过 |
+| `when.error` | 正则，大小写不敏感，对原始错误文案匹配 |
 | `when.provider` / `when.model` | 通配，只有 `*` 有特殊含义，大小写不敏感，整串匹配 |
-| `when.stopReason` | 目前只支持 `"error"`（也是默认） |
-| `then.action` | 目前只支持 `"continue"`（也是默认） |
-| `then.*` / `budget.*` | 覆盖 `defaults` 里的同名字段，`budget` 覆盖 `then` |
+| `action`、`prompt`、`maxRetries`、`maxSameError`、`delay` | 覆盖顶层的同名字段 |
 
 `prompt` 里可以写 `{attempt}`（第几次）、`{max}`（最多几次）、`{error}`（错误摘要）、`{rule}`（规则名）。
 
-看不懂的条件或动作会让整条规则被丢掉，免得它匹配得比写的人以为的更宽；看不懂的参数只忽略那一项。丢掉和忽略的内容用 `/onward rules` 查看。设置文件不是合法 JSON 时一条规则都没有，启动时提醒，而且命令不会改写它。
-
-### 从 auto-continue 迁移
-
-`onward.json` 不存在而 `~/.pi/agent/auto-continue.json` 存在时，旧文件里的扁平字段会当作 `defaults` 读进来；旧文件不删，由你决定。
-
-只迁参数，不迁行为：旧扩展任何错误都续跑，这里没有内置规则，读进来之后出错仍然不续跑。想保持原来的行为：先用一次命令（比如 `/onward on`）把旧参数写进 `onward.json`，再在里面加一条不带 `when` 的规则 `"rules": [{ "name": "any" }]`，然后 `/onward reload`。也可以直接换成[常见规则](#-常见规则)。
+看不懂的条件或 `action` 会让整条规则被丢掉，免得它匹配得比写的人以为的更宽、或者多发请求；其他看不懂或超出范围的参数只忽略那一项，退回顶层的值，不会悄悄改成范围内的数。丢掉和忽略的内容用 `/onward show` 查看。设置文件不是合法 JSON 时一条规则都没有，启动时提醒；命令不会改写它，也不改设置，回复「未做任何修改」。
 
 ## 📋 常见规则
 
-下面这份就是 [`example.json`](example.json) 的 `rules`（那个文件还写全了 `defaults` 的默认值），可以直接存成 `~/.pi/agent/onward.json`，再 `/onward reload`。按顺序第一条命中的生效，所以「重试没用」的放在最前面；用不到的整条删掉。
+下面这份就是 [`example.json`](example.json) 的 `rules`（那个文件还写全了顶层参数的默认值），可以直接存成 `~/.pi/agent/onward.json`，再 `/onward reload`。按顺序第一条命中的生效，所以「重试没用」的放在最前面；用不到的整条删掉。
 
 ```json
 {
   "rules": [
-    {
-      "name": "quota",
-      "when": { "match": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|usage limit|余额不足|额度不足|额度已用尽" },
-      "budget": { "maxRetries": 0 }
-    },
-    {
-      "name": "context-overflow",
-      "when": { "match": "context[\\s_-]*(length|window)|prompt (is )?too long|maximum context|request_too_large" },
-      "budget": { "maxRetries": 0 }
-    },
-    {
-      "name": "auth",
-      "when": { "match": "\\b401\\b|unauthorized|authentication|invalid[\\s_-]*(x-)?(api[\\s_-]*)?(key|token)" },
-      "then": { "mode": "silent" },
-      "budget": { "maxRetries": 20, "retryCapMs": 10000 }
-    },
-    {
-      "name": "rate-limit",
-      "when": { "match": "\\b429\\b|rate[\\s_-]*limit|too many requests|resource[\\s_-]*exhausted" },
-      "then": { "mode": "silent" },
-      "budget": { "maxRetries": 5, "retryDelaysMs": [30000, 60000, 120000] }
-    },
-    {
-      "name": "server",
-      "when": { "match": "\\b(500|502|503|504|520|524|529)\\b|overloaded|server[\\s_-]*error|internal[\\s_-]*error|bad gateway|service[\\s_-]*unavailable|upstream|负载已饱和" },
-      "then": { "mode": "silent" }
-    },
-    {
-      "name": "network",
-      "when": { "match": "connection|network|econnreset|econnrefused|etimedout|socket hang up|fetch failed|timed? ?out|terminated" },
-      "then": { "mode": "silent" }
-    },
-    {
-      "name": "fallback",
-      "then": { "mode": "message", "prompt": "上一步出错了（{error}），接着做" },
-      "budget": { "maxRetries": 3, "sameErrorLimit": 2 }
-    }
+    { "name": "quota", "when": { "error": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|usage limit|余额不足|额度不足|额度已用尽" }, "action": "stop" },
+    { "name": "context-overflow", "when": { "error": "context[\\s_-]*(length|window)|prompt (is )?too long|maximum context|request_too_large" }, "action": "stop" },
+    { "name": "auth", "when": { "error": "\\b401\\b|unauthorized|authentication|invalid[\\s_-]*(x-)?(api[\\s_-]*)?(key|token)" }, "action": "resend", "maxRetries": 20, "delay": "3s..10s" },
+    { "name": "rate-limit", "when": { "error": "\\b429\\b|rate[\\s_-]*limit|too many requests|resource[\\s_-]*exhausted" }, "action": "resend", "maxRetries": 5, "delay": "30s,1m,2m" },
+    { "name": "server", "when": { "error": "\\b(500|502|503|504|520|524|529)\\b|overloaded|server[\\s_-]*error|internal[\\s_-]*error|bad gateway|service[\\s_-]*unavailable|upstream|负载已饱和" }, "action": "resend" },
+    { "name": "network", "when": { "error": "connection|network|econnreset|econnrefused|etimedout|socket hang up|fetch failed|timed? ?out|terminated" }, "action": "resend" },
+    { "name": "fallback", "action": "message", "prompt": "上一步出错了（{error}），接着做", "maxRetries": 3, "maxSameError": 2 }
   ]
 }
 ```
 
 | 规则 | 管什么 | 怎么做 |
 | :--- | :----- | :----- |
-| `quota` | 额度、余额用完（`insufficient_quota`、`billing`、`usage limit`、`余额不足`） | 次数 0：只提醒，不续跑，也不落到后面的兜底 |
-| `context-overflow` | 上下文超长 | 次数 0：pi 已经自动压缩并重来过一次，再发一样会超。手动 `/compact` 或换更大上下文的模型 |
+| `quota` | 额度、余额用完（`insufficient_quota`、`billing`、`usage limit`、`余额不足`） | `stop`：只提醒，不续跑，也不落到后面的兜底 |
+| `context-overflow` | 上下文超长 | `stop`：pi 已经自动压缩并重来过一次，再发一样会超。手动 `/compact` 或换更大上下文的模型 |
 | `auth` | 中转间歇吐出的 `401`、`Invalid API key` | 静默重发，最多 20 次，间隔封顶 10 秒；key 真的错了的话，同一个错误连续超过 10 次就停 |
 | `rate-limit` | pi 自带重试用完后仍然 `429` | 静默重发，间隔拉长到 30 秒 → 1 分 → 2 分，最多 5 次 |
 | `server` | `5xx`、`overloaded`、上游负载饱和 | 静默重发，默认间隔 |
@@ -179,29 +142,28 @@ pi install ./pi-onward
 | `fallback` | 上面都没命中的错误 | 发一条带错误摘要的消息，让模型自己接着做；最多 3 次，同一个错误连续超过 2 次就停。不想兜底就删掉 |
 
 - 只想对某个中转生效：在 `when` 里加 `"provider": "你的中转-*"`（只有 `*` 是通配）。
-- 各家的错误文案不一样。没命中的话，看通知里的错误摘要，补进对应规则的 `match`。`match` 对原始错误文案匹配，大小写不敏感，JSON 里的反斜杠要写两遍。
+- 各家的错误文案不一样。没命中的话，看通知里的错误摘要，补进对应规则的 `when.error`。它对原始错误文案匹配，大小写不敏感，JSON 里的反斜杠要写两遍。
 
 ## 🧰 命令速查
 
+动作在前，参数写成 `字段=值`，字段名和设置文件一样。
+
 | 命令 | 作用 |
 | :--- | :--- |
-| `/onward` | 当前设置、设置来源、恢复前已续跑几次 |
+| `/onward` · `/onward status` | 开关、设置文件、恢复前已续跑几次 |
 | `/onward on` · `off` | 开关 |
-| `/onward message` · `silent` | 默认续跑方式 |
-| `/onward 10` | 默认最多续跑 10 次 |
-| `/onward 5s,10s,30s` | 写死间隔列表（单位 `ms` `s` `m`） |
-| `/onward base=3s cap=15s` | 按次数增长的基数与封顶 |
-| `/onward ramp` | 清掉间隔列表，回到按次数增长 |
-| `/onward same=10` | 同一个错误连续 10 次后，第 11 次彻底停 |
-| `/onward prompt=继续` | message 模式发的消息（吃掉整行剩下的部分） |
-| `/onward rules` | 列出规则，以及设置文件里被丢掉、被忽略的内容 |
+| `/onward show` | 各项参数的值和来源（设置文件或内置默认值）、规则、设置文件里的问题 |
+| `/onward show rules` | 只看规则 |
+| `/onward set 字段=值 …` | 改顶层的参数，规则没写的字段用它；例如 `set action=resend maxRetries=20 delay=5s,10s,30s` |
+| `/onward unset 字段 …` | 去掉参数，退回内置默认值，例如 `unset delay` |
 | `/onward reload` | 重新读设置文件 |
-| `/onward reset` | 去掉 `enabled` 和 `defaults`，保留手写的 `rules` |
-| `/onward help` | 用法 |
+| `/onward reset` | 去掉 `enabled` 和顶层的参数，保留手写的 `rules` |
+| `/onward --help` | 用法 |
 
-可以一次写几项，例如 `/onward silent 20 same=5 base=2s cap=10s`。
-
-除了 `on` / `off`、`rules`、`reload`、`reset`、`help`，其余命令改的都是 `defaults`：规则自己没写的参数用它。命令不会新增规则。
+- `set` 全有或全无：任何一项不合法就一项都不改，问题一起说。
+- 值里有空格时加双引号：`/onward set prompt="接着做，第 {attempt} 次"`。
+- 命令不会新增规则，`set rules=…` 会被拒绝。
+- 输入时按 Tab 补全动作、字段名和 `action` 的取值。
 
 ## ❓ 常见问题
 
@@ -241,6 +203,6 @@ npm run check                # biome + tsc + 测试 + 用 pi 的加载器加载�
 
 | 目录 | 内容 |
 | :--- | :--- |
-| `src/policy/` | 纯逻辑，不碰 pi 和文件：什么算失败（`failure`）、命中哪条规则（`rules`）、按什么参数（`policy`）、等多久（`delay`）、什么时候停（`tracker`）；`config` 把它们拼成设置文件的模型 |
+| `src/policy/` | 纯逻辑，不碰 pi 和文件：什么算失败（`failure`）、命中哪条规则（`rules`）、按什么参数（`policy`，一张字段表管校验、帮助和补全）、等多久（`delay`）、什么时候停（`tracker`）；`config` 把它们拼成设置文件的模型 |
 | `src/extension/` | 接 pi：`onward` 处理事件并续跑，`command` 是 `/onward`，`settings` 读写设置文件，`text` 是给人看的文字，`index` 把它们装起来 |
 | `tests/` | `node:test`，目录与 `src/` 对应；`tests/support/fake-pi.ts` 按 pi 的真实事件顺序发事件 |

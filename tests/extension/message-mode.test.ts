@@ -4,8 +4,8 @@ import { aborted, boundaryEvent, err, harness, ok, tool } from "../support/fake-
 
 /** 兜底规则：没有内置规则，测试里要自己写。 */
 const any = [{ name: "any" }];
-const fast = (defaults: Record<string, unknown> = {}) => ({
-	config: { defaults: { retryDelaysMs: [0], ...defaults }, rules: any },
+const fast = (params: Record<string, unknown> = {}) => ({
+	config: { delay: "0s", ...params, rules: any },
 });
 
 test("在收尾边界上追加一条看得见的消息并要求继续", async () => {
@@ -58,7 +58,7 @@ test("续跑成功后再出错：次数从头算", async () => {
 });
 
 test("用户自己开新一轮：额度清零", async () => {
-	const h = harness(fast({ sameErrorLimit: 3 }));
+	const h = harness(fast({ maxSameError: 3 }));
 	for (let i = 0; i < 4; i++) await h.boundary(err());
 	assert.equal(h.sent.length, 3);
 	await h.emit("agent_start");
@@ -67,7 +67,7 @@ test("用户自己开新一轮：额度清零", async () => {
 });
 
 test("间隔真的等够，提示词模板生效", async () => {
-	const h = harness(fast({ retryDelaysMs: [40], prompt: "第 {attempt}/{max} 次：{error}" }));
+	const h = harness(fast({ delay: "40ms", prompt: "第 {attempt}/{max} 次：{error}" }));
 	const started = Date.now();
 	await h.boundary(err());
 	assert.ok(Date.now() - started >= 30);
@@ -76,12 +76,12 @@ test("间隔真的等够，提示词模板生效", async () => {
 });
 
 test("等的时候：按 Esc、用户发了消息、关掉，都不续跑", async () => {
-	const esc = harness(fast({ retryDelaysMs: [200] }));
+	const esc = harness(fast({ delay: "200ms" }));
 	const waiting = esc.boundary(err());
 	setTimeout(() => esc.controller.abort(), 20);
 	assert.equal(await waiting, undefined);
 
-	const typed = harness(fast({ retryDelaysMs: [60] }));
+	const typed = harness(fast({ delay: "60ms" }));
 	const pending = typed.boundary(err());
 	setTimeout(() => (typed.pending = 1), 20);
 	assert.equal(await pending, undefined);
@@ -89,7 +89,7 @@ test("等的时候：按 Esc、用户发了消息、关掉，都不续跑", asyn
 	typed.pending = 1;
 	assert.equal(await typed.boundary(err()), undefined, "已经有排队的消息：不插手");
 
-	const off = harness(fast({ retryDelaysMs: [5_000] }));
+	const off = harness(fast({ delay: "5s" }));
 	const started = Date.now();
 	const stopped = off.boundary(err());
 	setTimeout(() => off.command("off"), 20);
@@ -108,10 +108,10 @@ test("同一会话装了两份：只有一份干活，上限照常", async () =>
 test("规则：没命中的错误不处理；各规则的提示词与次数", async () => {
 	const h = harness({
 		config: {
-			defaults: { retryDelaysMs: [0] },
+			delay: "0s",
 			rules: [
-				{ name: "auth", when: { match: "401" }, then: { prompt: "鉴权抖了，接着干" }, budget: { maxRetries: 1 } },
-				{ name: "busy", when: { match: "429|502" } },
+				{ name: "auth", when: { error: "401" }, prompt: "鉴权抖了，接着干", maxRetries: 1 },
+				{ name: "busy", when: { error: "429|502" } },
 			],
 		},
 	});
@@ -126,14 +126,14 @@ test("规则：没命中的错误不处理；各规则的提示词与次数", as
 });
 
 test("规则按 provider 匹配", async () => {
-	const h = harness({ config: { defaults: { retryDelaysMs: [0] }, rules: [{ when: { provider: "welfare-*" } }] } });
+	const h = harness({ config: { delay: "0s", rules: [{ when: { provider: "welfare-*" } }] } });
 	await h.boundary(err("401", { provider: "openai" }));
 	await h.boundary(err("401", { provider: "welfare-k40" }));
 	assert.equal(h.sent.length, 1);
 });
 
 test("没有内置规则：没写 rules 或全部写坏都不续跑，启动时提醒", async () => {
-	const none = harness({ config: { defaults: { retryDelaysMs: [0] } } });
+	const none = harness({ config: { delay: "0s" } });
 	await none.emit("session_start", { reason: "startup" });
 	assert.match(none.notes.at(-1)![1], /^onward：没有可用的规则，出错时不会自动续跑/);
 	assert.equal(none.notes.at(-1)![0], "info");
@@ -142,7 +142,7 @@ test("没有内置规则：没写 rules 或全部写坏都不续跑，启动时�
 
 	// 只想处理 401，但 when 的键拼错了：整条丢掉，也不会退回「任何错误都续跑」。
 	const typo = harness({
-		config: { defaults: { retryDelaysMs: [0] }, rules: [{ name: "auth", when: { mach: "401" } }] },
+		config: { delay: "0s", rules: [{ name: "auth", when: { errr: "401" } }] },
 	});
 	await typo.emit("session_start", { reason: "startup" });
 	assert.match(typo.warnings()[0], /没有可用的规则.*设置文件有 1 处问题/);
@@ -157,11 +157,11 @@ test("没有内置规则：没写 rules 或全部写坏都不续跑，启动时�
 	assert.deepEqual(disabled.notes, []);
 });
 
-test("次数为 0 的规则：命中就停、只提醒，不会落到后面的兜底", async () => {
+test("action=stop 的规则：命中就停、只提醒，不会落到后面的兜底", async () => {
 	const h = harness({
 		config: {
-			defaults: { retryDelaysMs: [0] },
-			rules: [{ name: "quota", when: { match: "quota" }, budget: { maxRetries: 0 } }, { name: "any" }],
+			delay: "0s",
+			rules: [{ name: "quota", when: { error: "quota" }, action: "stop" }, { name: "any" }],
 		},
 	});
 	assert.equal(await h.boundary(err("429 insufficient_quota")), undefined);
@@ -169,13 +169,4 @@ test("次数为 0 的规则：命中就停、只提醒，不会落到后面的�
 	await h.emit("agent_start");
 	await h.boundary(err("502 upstream"));
 	assert.deepEqual(h.sent, ["继续"]);
-});
-
-test("旧的 /auto-continue 还装着时提醒", async () => {
-	const h = harness({ commands: ["auto-continue"] });
-	await h.emit("session_start", { reason: "startup" });
-	assert.match(h.warnings()[0], /旧的 \/auto-continue 扩展也装着/);
-	const quiet = harness({ commands: ["other"] });
-	await quiet.emit("session_start", { reason: "startup" });
-	assert.deepEqual(quiet.warnings(), []);
 });

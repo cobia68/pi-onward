@@ -40,13 +40,13 @@ test("README 常见规则：可直接使用，常见错误各归其位", () => {
 	const hit = (message: string) => matchFailure(config, err(message));
 	for (const [message, rule] of cases) assert.equal(hit(message)?.rule.name, rule, message);
 
-	assert.equal(hit("429 insufficient_quota")?.policy.maxRetries, 0);
-	assert.equal(hit("prompt is too long")?.policy.maxRetries, 0);
-	assert.equal(hit("401 Invalid API key")?.policy.mode, "silent");
-	assert.equal(hit("400 Invalid tool schema")?.policy.mode, "message");
+	assert.equal(hit("429 insufficient_quota")?.policy.action, "stop");
+	assert.equal(hit("prompt is too long")?.policy.action, "stop");
+	assert.equal(hit("401 Invalid API key")?.policy.action, "resend");
+	assert.equal(hit("400 Invalid tool schema")?.policy.action, "message");
 });
 
-test("example.json：解析无问题，defaults 就是内置默认值，rules 与 README 一致", () => {
+test("example.json：解析无问题，顶层参数就是内置默认值，rules 与 README 一致", () => {
 	const example = JSON.parse(readText("example.json"));
 	const config = parseConfig(example);
 	assert.deepEqual(config.problems, []);

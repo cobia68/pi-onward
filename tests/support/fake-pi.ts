@@ -60,14 +60,17 @@ export interface Harness {
 	pending: number;
 	/** 一次助手回复走到收尾边界；要求继续时模拟 pi 重新发 agent_start，否则落定。 */
 	boundary(message: any, id?: string): Promise<any>;
+	/** 状态栏里 pi-onward 那一格；写过几次。 */
+	status(): string | undefined;
+	statusWrites: number;
 }
 
 let sessions = 0;
 
-export function harness(
-	options: OnwardOptions & { config?: unknown; commands?: string[]; copies?: number } = {},
-): Harness {
-	const { config, commands: commandNames = [], copies = 1, ...installOptions } = options;
+export function harness(options: OnwardOptions & { config?: unknown; copies?: number; ui?: boolean } = {}): Harness {
+	const { config, copies = 1, ui = true, ...installOptions } = options;
+	const statuses = new Map<string, string>();
+	let statusWrites = 0;
 	const handlers = new Map<string, Handler[]>();
 	const commands = new Map<string, any>();
 	const sent: string[] = [];
@@ -76,13 +79,20 @@ export function harness(
 	const sessionId = `session-${++sessions}`;
 	let pending = 0;
 	const ctx = {
-		hasUI: true,
+		hasUI: ui,
 		get signal() {
 			return controller.signal;
 		},
 		hasPendingMessages: () => pending > 0,
 		sessionManager: { getSessionId: () => sessionId },
-		ui: { notify: (message: string, level: string) => notes.push([level, message]) },
+		ui: {
+			notify: (message: string, level: string) => notes.push([level, message]),
+			setStatus: (key: string, text: string | undefined) => {
+				statusWrites++;
+				if (text === undefined) statuses.delete(key);
+				else statuses.set(key, text);
+			},
+		},
 	};
 	const pi = {
 		on(event: string, handler: Handler) {
@@ -92,13 +102,10 @@ export function harness(
 		registerCommand(name: string, opts: any) {
 			commands.set(name, opts);
 		},
-		getCommands() {
-			return commandNames.map((name) => ({ name, source: "extension" }));
-		},
 	};
 	const configPath =
 		installOptions.configPath ?? (config === undefined ? join(tempDir(), "onward.json") : writeConfig(config));
-	for (let i = 0; i < copies; i++) install(pi as any, { legacyPath: false, ...installOptions, configPath });
+	for (let i = 0; i < copies; i++) install(pi as any, { ...installOptions, configPath });
 
 	// 和 pi 一样：边界上后一个处理器看到前面提出的条目和继续要求。
 	const emit = async (event: string, payload: any = {}) => {
@@ -127,6 +134,10 @@ export function harness(
 		configPath,
 		get pending() {
 			return pending;
+		},
+		status: () => statuses.get("pi-onward"),
+		get statusWrites() {
+			return statusWrites;
 		},
 		set pending(value: number) {
 			pending = value;

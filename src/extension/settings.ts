@@ -1,43 +1,47 @@
 /**
  * 设置文件 `<agent-dir>/onward.json` 的读写。
  *
- * `rules` 只能手写；命令只改 `enabled` 和 `defaults` 里这次动到的字段。每次写之前重读文件，
- * 在它当前的内容上合并，免得盖掉加载之后才手改的内容；文件不是合法 JSON 时拒绝写，让用户自己修。
- * `onward.json` 不存在时读旧版 `auto-continue.json`，第一次保存落到新文件，旧文件不删。
+ * `rules` 只能手写；命令只改 `enabled` 和顶层的参数字段。每次写之前重读文件，在它当前的内容上合并，免得盖掉
+ * 加载之后才手改的内容；文件不是合法 JSON 时拒绝写，让用户自己修。
  */
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { type Config, migrateLegacy, parseConfig } from "../policy/config.ts";
-import type { PolicyPatch } from "../policy/policy.ts";
+import { type Config, fileOrder, parseConfig } from "../policy/config.ts";
+import { FIELD_NAMES } from "../policy/policy.ts";
 import { errorText, isRecord } from "../util.ts";
 
 /** 当前设置从哪里来。 */
-export type Source = { kind: "file" | "legacy" | "none" } | { kind: "broken"; error: string };
+export type Source = { kind: "file" | "none" } | { kind: "broken"; error: string };
 
-/** 一次命令改了什么；没写的字段不动。 */
+/** 一次命令改了什么：`set` 是设置文件里的值，`unset` 是要去掉的键；没写的不动。 */
 export interface SettingsChange {
 	enabled?: boolean;
-	patch: PolicyPatch;
+	set?: Record<string, unknown>;
+	unset?: readonly string[];
 }
+
+/** 改动的结果：写好了；文件坏了，什么都没改；或者写不进去，这次运行仍按改过的设置走。 */
+export type Saved =
+	| { kind: "saved"; value: Record<string, unknown> }
+	| { kind: "broken"; error: string }
+	| { kind: "unwritten"; error: string };
+
+/** reset 去掉的键：开关和顶层的参数。 */
+const COMMAND_KEYS: readonly string[] = ["enabled", ...FIELD_NAMES];
 
 interface Loaded {
 	config: Config;
 	source: Source;
 }
 
-/** 命令只管这两个键。 */
-const COMMAND_KEYS = new Set(["enabled", "defaults"]);
-
 export class Settings {
 	readonly path: string;
-	readonly legacyPath: string | undefined;
 	private loaded: Loaded;
 
-	constructor(path: string, legacyPath?: string) {
+	constructor(path: string) {
 		this.path = path;
-		this.legacyPath = legacyPath;
-		this.loaded = load(path, legacyPath);
+		this.loaded = load(path);
 	}
 
 	get config(): Config {
@@ -49,67 +53,45 @@ export class Settings {
 	}
 
 	reload(): void {
-		this.loaded = load(this.path, this.legacyPath);
+		this.loaded = load(this.path);
 	}
 
-	/** 改动总是立即生效；写不进文件时抛出，这次运行仍按改过的设置走。 */
-	update(change: SettingsChange): void {
+	/** 在文件当前的内容上合并后写回；文件坏了时不动它。 */
+	update(change: SettingsChange): Saved {
 		const current = readJson(this.path);
-		const base =
-			current.kind === "ok" && isRecord(current.value)
-				? current.value
-				: { enabled: this.config.enabled, defaults: this.config.defaults };
-		const next = applyChange(base, change);
-		const config = parseConfig(next);
-		if (current.kind === "broken") {
-			this.loaded = { ...this.loaded, config };
-			throw new Error(`${this.path} 不是合法 JSON（${current.error}），先修好再改设置`);
+		if (current.kind === "broken") return current;
+		const next = applyChange(current.kind === "ok" && isRecord(current.value) ? current.value : {}, change);
+		this.loaded = { config: parseConfig(next), source: { kind: "file" } };
+		try {
+			writeJson(this.path, next);
+		} catch (error: unknown) {
+			return { kind: "unwritten", error: errorText(error) };
 		}
-		this.loaded = { config, source: { kind: "file" } };
-		writeJson(this.path, next);
+		return { kind: "saved", value: next };
 	}
 
-	/** 去掉命令管的键，手写的 rules 留着；只剩空壳就删文件。返回文件是否还在。 */
-	reset(): boolean {
-		const current = readJson(this.path);
-		if (current.kind === "broken")
-			throw new Error(`${this.path} 不是合法 JSON（${current.error}），先修好再恢复默认`);
-		const entries = current.kind === "ok" && isRecord(current.value) ? Object.entries(current.value) : [];
-		const rest = Object.fromEntries(entries.filter(([key]) => !COMMAND_KEYS.has(key)));
-		const kept = Object.keys(rest).some((key) => key !== "$schema");
-		if (kept) writeJson(this.path, rest);
-		else rmSync(this.path, { force: true });
-		this.reload();
-		return kept;
+	/** 去掉开关和顶层的参数，手写的 rules 和其他内容留着。 */
+	reset(): Saved {
+		return this.update({ unset: COMMAND_KEYS });
 	}
 }
 
-/** `PI_ONWARD_CONFIG` / `PI_AUTO_CONTINUE_CONFIG` 可改路径。 */
-export function defaultPaths(env: NodeJS.ProcessEnv = process.env): { path: string; legacyPath: string } {
-	const agentDir = env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-	return {
-		path: env.PI_ONWARD_CONFIG || join(agentDir, "onward.json"),
-		legacyPath: env.PI_AUTO_CONTINUE_CONFIG || join(agentDir, "auto-continue.json"),
-	};
+/** `PI_ONWARD_CONFIG` 可改路径。 */
+export function defaultPath(env: NodeJS.ProcessEnv = process.env): string {
+	return env.PI_ONWARD_CONFIG || join(env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "onward.json");
 }
 
 function applyChange(base: Record<string, unknown>, change: SettingsChange): Record<string, unknown> {
-	const defaults = isRecord(base.defaults) ? base.defaults : {};
-	return {
-		...base,
-		...(change.enabled === undefined ? {} : { enabled: change.enabled }),
-		defaults: { ...defaults, ...change.patch },
-	};
+	const next: Record<string, unknown> = { ...base, ...change.set };
+	if (change.enabled !== undefined) next.enabled = change.enabled;
+	for (const name of change.unset ?? []) delete next[name];
+	return fileOrder(next);
 }
 
-function load(path: string, legacyPath: string | undefined): Loaded {
+function load(path: string): Loaded {
 	const current = readJson(path);
 	if (current.kind === "ok") return { config: parseConfig(current.value), source: { kind: "file" } };
-	if (current.kind === "broken")
-		return { config: parseConfig(undefined), source: { kind: "broken", error: current.error } };
-	const legacy = legacyPath === undefined ? undefined : readJson(legacyPath);
-	if (legacy?.kind === "ok") return { config: migrateLegacy(legacy.value), source: { kind: "legacy" } };
-	return { config: parseConfig(undefined), source: { kind: "none" } };
+	return { config: parseConfig(undefined), source: current.kind === "broken" ? current : { kind: "none" } };
 }
 
 type ReadResult = { kind: "missing" } | { kind: "broken"; error: string } | { kind: "ok"; value: unknown };
@@ -129,15 +111,14 @@ function readJson(path: string): ReadResult {
 	}
 }
 
-/** 先写临时文件再改名：写到一半失败也不会留下半个文件。 */
+/** 先写临时文件再改名：写到一半失败也不会留下半个文件；改名之后临时文件已不在，删它不做事。 */
 function writeJson(path: string, value: unknown): void {
 	mkdirSync(dirname(path), { recursive: true });
 	const temp = `${path}.${process.pid}.tmp`;
-	writeFileSync(temp, `${JSON.stringify(value, null, "\t")}\n`, { mode: 0o600 });
 	try {
+		writeFileSync(temp, `${JSON.stringify(value, null, "\t")}\n`, { mode: 0o600 });
 		renameSync(temp, path);
-	} catch (error: unknown) {
+	} finally {
 		rmSync(temp, { force: true });
-		throw error;
 	}
 }

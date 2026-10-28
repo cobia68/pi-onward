@@ -1,14 +1,14 @@
 /**
- * 规则 = 条件（when）+ 动作（then）+ 预算（budget），按顺序第一条命中的生效。
+ * 规则 = 条件（when）+ 参数，按顺序第一条命中的生效。参数和设置文件顶层同名，只写和顶层不同的。
  * 没有内置规则：没写、全部写坏或没命中，都不处理。
  */
 import { errorText, isRecord } from "../util.ts";
 import type { Failure } from "./failure.ts";
-import { type PolicyPatch, parsePolicyPatch } from "./policy.ts";
+import { FIELD_NAMES, type PolicyPatch, readRuleParams } from "./policy.ts";
 
 export interface RuleWhen {
-	/** 正则，大小写不敏感，对原始错误文案匹配。 */
-	match?: string;
+	/** 大小写不敏感，对原始错误文案匹配；读设置时编译一次。 */
+	error?: RegExp;
 	/** 通配，只有 `*` 有特殊含义。 */
 	provider?: string;
 	model?: string;
@@ -18,20 +18,20 @@ export interface Rule {
 	name: string;
 	enabled: boolean;
 	when: RuleWhen;
-	/** then 与 budget 合并后的参数，只覆盖写了的字段。 */
+	/** 规则自己写的参数，只覆盖写了的字段。 */
 	patch: PolicyPatch;
 }
 
 const MAX_RULES = 50;
 const MAX_NAME = 40;
-const RULE_KEYS = new Set(["name", "enabled", "when", "then", "budget"]);
+const RULE_KEYS = new Set(["name", "enabled", "when", ...FIELD_NAMES]);
 
 export function findRule(rules: readonly Rule[], failure: Failure): Rule | undefined {
 	return rules.find((rule) => rule.enabled && matches(rule.when, failure));
 }
 
 function matches(when: RuleWhen, failure: Failure): boolean {
-	if (when.match !== undefined && !new RegExp(when.match, "i").test(failure.errorMessage ?? "")) return false;
+	if (when.error !== undefined && !when.error.test(failure.errorMessage ?? "")) return false;
 	if (when.provider !== undefined && !glob(when.provider, failure.provider)) return false;
 	if (when.model !== undefined && !glob(when.model, failure.model)) return false;
 	return true;
@@ -66,31 +66,30 @@ export function parseRules(raw: unknown, problems: string[]): Rule[] {
 	return rules;
 }
 
-/**
- * 看不懂的条件或动作整条丢掉：忽略一个条件会让规则匹配得更宽，多发真实请求。
- * 看不懂的参数只忽略那一项：最多退回默认值。
- */
+function ruleLabel(raw: Record<string, unknown>, index: number): string {
+	return `rules[${index}]（${ruleName(raw, index)}）`;
+}
+
+function ruleName(raw: Record<string, unknown>, index: number): string {
+	return typeof raw.name === "string" && raw.name.trim() ? raw.name.trim().slice(0, MAX_NAME) : `rule-${index + 1}`;
+}
+
+/** 看不懂的条件整条丢掉：忽略一个条件会让规则匹配得更宽。参数怎么处理见 readRuleParams。 */
 function parseRule(raw: unknown, index: number, problems: string[]): Rule | undefined {
-	const where = `rules[${index}]`;
 	if (!isRecord(raw)) {
-		problems.push(`${where} 不是对象，已丢弃`);
+		problems.push(`rules[${index}] 不是对象，已丢弃`);
 		return undefined;
 	}
-	const name =
-		typeof raw.name === "string" && raw.name.trim() ? raw.name.trim().slice(0, MAX_NAME) : `rule-${index + 1}`;
-	const label = `${where}（${name}）`;
+	const label = ruleLabel(raw, index);
 	const when = parseWhen(raw.when);
-	const params = parseThen(raw.then);
-	if (typeof when === "string" || typeof params === "string") {
-		problems.push(`${label}.${typeof when === "string" ? when : params}，已丢弃`);
+	if (typeof when === "string") {
+		problems.push(`${label}.${when}，已丢弃`);
 		return undefined;
 	}
-	const patch = {
-		...parsePolicyPatch(params, `${label}.then`, problems),
-		...parsePolicyPatch(raw.budget, `${label}.budget`, problems),
-	};
+	const patch = readRuleParams(raw, `${label}.`, problems);
+	if (!patch) return undefined;
 	for (const key of Object.keys(raw)) if (!RULE_KEYS.has(key)) problems.push(`${label}.${key} 不认识，已忽略`);
-	return { name, enabled: raw.enabled !== false, when, patch };
+	return { name: ruleName(raw, index), enabled: raw.enabled !== false, when, patch };
 }
 
 /** 合法时返回条件，否则返回原因。 */
@@ -100,17 +99,14 @@ function parseWhen(raw: unknown): RuleWhen | string {
 	const when: RuleWhen = {};
 	for (const [key, value] of Object.entries(raw)) {
 		switch (key) {
-			// 失败本来就只有 error 一种；先占住字段，以后支持 length 之类再放开。
-			case "stopReason":
-				if (value !== "error") return `when.stopReason 目前只支持 "error"`;
+			case "error":
+				if (typeof value !== "string" || !value) return "when.error 需要非空正则字符串";
+				try {
+					when.error = new RegExp(value, "i");
+				} catch (error: unknown) {
+					return `when.error 不是合法正则（${errorText(error)}）`;
+				}
 				break;
-			case "match": {
-				if (typeof value !== "string" || !value) return "when.match 需要非空正则字符串";
-				const invalid = regexError(value);
-				if (invalid) return `when.match 不是合法正则（${invalid}）`;
-				when.match = value;
-				break;
-			}
 			case "provider":
 			case "model":
 				if (typeof value !== "string" || !value.trim()) return `when.${key} 需要非空字符串`;
@@ -121,21 +117,4 @@ function parseWhen(raw: unknown): RuleWhen | string {
 		}
 	}
 	return when;
-}
-
-/** 合法时返回动作以外的参数，否则返回原因。 */
-function parseThen(raw: unknown): Record<string, unknown> | string {
-	if (raw === undefined) return {};
-	if (!isRecord(raw)) return "then 不是对象";
-	const { action = "continue", ...params } = raw;
-	return action === "continue" ? params : `then.action 目前只支持 "continue"`;
-}
-
-function regexError(source: string): string | undefined {
-	try {
-		new RegExp(source, "i");
-		return undefined;
-	} catch (error: unknown) {
-		return errorText(error);
-	}
 }

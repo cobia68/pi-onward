@@ -1,38 +1,80 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseCommand } from "../../src/extension/command.ts";
+import { completeArguments, parseCommand } from "../../src/extension/command.ts";
 
-test("命令解析", () => {
+test("动作在前：status 是默认，--help 写在哪都行", () => {
 	assert.deepEqual(parseCommand(""), { kind: "status" });
 	assert.deepEqual(parseCommand(" status "), { kind: "status" });
 	assert.deepEqual(parseCommand("--help"), { kind: "help" });
-	assert.deepEqual(parseCommand("rules"), { kind: "rules" });
+	assert.deepEqual(parseCommand("set --help"), { kind: "help" });
+	assert.deepEqual(parseCommand("show"), { kind: "show", rules: false });
+	assert.deepEqual(parseCommand("show rules"), { kind: "show", rules: true });
 	assert.deepEqual(parseCommand("reload"), { kind: "reload" });
-	assert.deepEqual(parseCommand("reset"), { kind: "reset" });
-	assert.deepEqual(parseCommand("10"), { kind: "set", patch: { maxRetries: 10 } });
-	assert.deepEqual(parseCommand("off"), { kind: "set", enabled: false, patch: {} });
-	assert.deepEqual(parseCommand("on silent"), { kind: "set", enabled: true, patch: { mode: "silent" } });
-	assert.deepEqual(parseCommand("same=3"), { kind: "set", patch: { sameErrorLimit: 3 } });
-	assert.deepEqual(parseCommand("5s,10s,30s,1m"), {
-		kind: "set",
-		patch: { retryDelaysMs: [5000, 10000, 30000, 60000] },
-	});
-	assert.deepEqual(parseCommand("500ms 2s"), { kind: "set", patch: { retryDelaysMs: [500, 2000] } });
-	assert.deepEqual(parseCommand("base=2s cap=20s"), { kind: "set", patch: { retryBaseMs: 2000, retryCapMs: 20000 } });
-	assert.deepEqual(parseCommand("ramp"), { kind: "set", patch: { retryDelaysMs: [] } });
-	assert.deepEqual(parseCommand("3 same=2 5s"), {
-		kind: "set",
-		patch: { maxRetries: 3, sameErrorLimit: 2, retryDelaysMs: [5000] },
-	});
-	assert.deepEqual(parseCommand("prompt=继续, 第 {attempt} 次"), {
-		kind: "set",
-		patch: { prompt: "继续, 第 {attempt} 次" },
-	});
-	for (const bad of ["prompt=", "foo", "5x", "base=abc", "base="]) assert.equal(parseCommand(bad).kind, "error", bad);
+	assert.deepEqual(parseCommand("RESET"), { kind: "reset" });
+	assert.deepEqual(parseCommand("on"), { kind: "update", change: { enabled: true } });
+	assert.deepEqual(parseCommand("off"), { kind: "update", change: { enabled: false } });
 });
 
-test("范围和设置文件一致", () => {
-	assert.deepEqual(parseCommand("999"), { kind: "set", patch: { maxRetries: 50 } });
-	assert.deepEqual(parseCommand("same=0"), { kind: "set", patch: { sameErrorLimit: 1 } });
-	assert.deepEqual(parseCommand(`prompt=${"x".repeat(600)}`), { kind: "set", patch: { prompt: "x".repeat(500) } });
+test("set 字段=值：字段名和设置文件一样，大小写不敏感；值里有空格时加双引号", () => {
+	const change = (text: string) => (parseCommand(text) as { change: unknown }).change;
+	assert.deepEqual(change("set action=resend maxretries=20 delay=5s,10s,30s"), {
+		set: { action: "resend", maxRetries: 20, delay: "5s,10s,30s" },
+	});
+	assert.deepEqual(change('set prompt="继续，第 {attempt} 次" maxSameError=3'), {
+		set: { prompt: "继续，第 {attempt} 次", maxSameError: 3 },
+	});
+	assert.deepEqual(change("set delay=3s..15s"), { set: { delay: "3s..15s" } });
+	assert.deepEqual(change("unset delay maxRetries"), { unset: ["delay", "maxRetries"] });
+});
+
+test("set 全有或全无：任何一项不对就一项都不改，问题一起说", () => {
+	const bad = parseCommand("set maxRetries=0 delay=5 action=resend colour=red");
+	assert.equal(bad.kind, "error");
+	assert.match(
+		(bad as { message: string }).message,
+		/^maxRetries 需要 1–50 的整数；delay 写成 .*；不认识的字段 colour；可用 action、prompt、maxRetries、maxSameError、delay。未做任何修改$/,
+	);
+	for (const text of [
+		"set",
+		"set maxRetries",
+		"set =3",
+		"set maxRetries=3 maxRetries=4",
+		"set rules=[]",
+		"set enabled=false",
+	])
+		assert.equal(parseCommand(text).kind, "error", text);
+	assert.match((parseCommand("set rules=[]") as { message: string }).message, /rules 要在设置文件里手写/);
+	assert.match((parseCommand("unset enabled") as { message: string }).message, /开关用 \/onward on 或 off/);
+	for (const text of ["unset", "unset foo", "status now", "show all", 'set prompt="x'])
+		assert.equal(parseCommand(text).kind, "error", text);
+});
+
+test("不认识的动作：说明有哪些", () => {
+	assert.deepEqual(parseCommand("10"), {
+		kind: "error",
+		message: "不认识的动作 10；可用 status、on、off、show、set、unset、reload、reset",
+	});
+});
+
+test("补全：动作、字段名、action 的取值；写完了就不给", () => {
+	const values = (prefix: string) => completeArguments(prefix)?.map((item) => item.value);
+	assert.deepEqual(values("s"), ["status", "show ", "set "]);
+	assert.deepEqual(values("set "), [
+		"set action=",
+		"set prompt=",
+		"set maxRetries=",
+		"set maxSameError=",
+		"set delay=",
+	]);
+	assert.deepEqual(values("set action="), ["set action=message ", "set action=resend ", "set action=stop "]);
+	assert.deepEqual(values("set maxRetries=5 de"), ["set maxRetries=5 delay="]);
+	assert.deepEqual(values("unset delay "), [
+		"unset delay action ",
+		"unset delay prompt ",
+		"unset delay maxRetries ",
+		"unset delay maxSameError ",
+	]);
+	assert.deepEqual(values("show "), ["show rules"]);
+	assert.equal(completeArguments("status"), null, "写完了：回车直接执行");
+	assert.equal(completeArguments("reload "), null);
 });
