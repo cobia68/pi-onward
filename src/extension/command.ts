@@ -193,26 +193,34 @@ function actionList(): string {
 
 /** 按空白分开，双引号里的空白不分；引号本身去掉。 */
 function tokenize(text: string): string[] | string {
-	const tokens: string[] = [];
-	let current = "";
-	let quoted = false;
+	const { words, quoted } = scan(text);
+	return quoted ? "引号没有配对" : words;
+}
+
+/** 执行和补全共用。`start` 是正在写的词在原文里的起点，以空白结尾时就是末尾；`quoted`：引号到末尾还没配对。 */
+function scan(text: string): { words: string[]; start: number; quoted: boolean } {
+	const words: string[] = [];
+	let word = "";
 	let started = false;
-	for (const char of text.trim()) {
+	let quoted = false;
+	let start = 0;
+	for (let i = 0; i < text.length; i++) {
+		const char = text[i];
 		if (char === '"') {
 			quoted = !quoted;
 			started = true;
 		} else if (!quoted && /\s/.test(char)) {
-			if (started) tokens.push(current);
-			current = "";
+			if (started) words.push(word);
+			word = "";
 			started = false;
+			start = i + 1;
 		} else {
-			current += char;
+			word += char;
 			started = true;
 		}
 	}
-	if (quoted) return "引号没有配对";
-	if (started) tokens.push(current);
-	return tokens;
+	if (started) words.push(word);
+	return { words, start, quoted };
 }
 
 interface Candidate {
@@ -222,15 +230,17 @@ interface Candidate {
 	more: boolean;
 }
 
-/** 补全：动作、show 的 rules、set 和 unset 的字段名、action 的取值。都写完了就不给，回车直接执行。 */
+/**
+ * 补全：动作、show 的 rules、set 和 unset 的字段名、action 的取值；写过的字段和引号里的值不补，都写完了就不给，
+ * 回车直接执行。返回的 value 换掉「/onward 」后面的全部文字，正在写的词前面原样保留。
+ */
 export function completeArguments(prefix: string): { value: string; label: string; description: string }[] | null {
-	const tokens = prefix.trimStart().split(/\s+/);
-	// split 至少返回一项：正在写的那个词，可能是空串。
-	const current = tokens.pop()!;
-	const head = tokens.length ? `${tokens.join(" ")} ` : "";
-	const shown = candidates(tokens, current).filter((item) =>
-		item.value.toLowerCase().startsWith(current.toLowerCase()),
-	);
+	const { words, start } = scan(prefix);
+	const current = prefix.slice(start);
+	if (current.includes('"')) return null;
+	const head = prefix.slice(0, start);
+	const done = current ? words.slice(0, -1) : words;
+	const shown = candidates(done, current).filter((item) => item.value.toLowerCase().startsWith(current.toLowerCase()));
 	if (!shown.length || shown.some((item) => item.value.toLowerCase() === current.toLowerCase())) return null;
 	return shown.map((item) => ({
 		value: `${head}${item.value}${item.more && !item.value.endsWith("=") ? " " : ""}`,
@@ -239,28 +249,29 @@ export function completeArguments(prefix: string): { value: string; label: strin
 	}));
 }
 
-function candidates(tokens: string[], current: string): Candidate[] {
-	const action = tokens[0]?.toLowerCase();
+function candidates(words: string[], current: string): Candidate[] {
+	const [first, ...rest] = words;
+	const action = first?.toLowerCase();
 	if (action === undefined)
 		return ACTIONS.map((item) => ({ value: item.name, description: item.description, more: item.args !== "" }));
-	if (action === "show" && tokens.length === 1) return [{ value: "rules", description: "只看规则", more: false }];
+	if (action === "show" && !rest.length) return [{ value: "rules", description: "只看规则", more: false }];
+	if (action !== "set" && action !== "unset") return [];
+	// 写过的字段不再给：再写一次，执行时会被拒绝。
+	const written = new Set(rest.map((word) => fieldNamed(word.split("=")[0])?.name));
+	const unwritten = FIELDS.filter((item) => !written.has(item.name));
 	if (action === "unset")
-		return FIELDS.filter((item) => !tokens.includes(item.name)).map((item) => ({
-			value: item.name,
-			description: item.description,
-			more: true,
-		}));
-	if (action !== "set") return [];
+		return unwritten.map((item) => ({ value: item.name, description: item.description, more: true }));
 	const equals = current.indexOf("=");
 	if (equals < 0)
-		return FIELDS.map((item) => ({
+		return unwritten.map((item) => ({
 			value: `${item.name}=`,
 			description: `${item.syntax}：${item.description}`,
 			more: true,
 		}));
 	const known = fieldNamed(current.slice(0, equals));
-	return (known?.choices ?? []).map((choice) => ({
-		value: `${known!.name}=${choice.value}`,
+	if (!known || written.has(known.name)) return [];
+	return (known.choices ?? []).map((choice) => ({
+		value: `${known.name}=${choice.value}`,
 		description: choice.description,
 		more: true,
 	}));

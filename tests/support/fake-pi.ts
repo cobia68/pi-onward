@@ -1,4 +1,4 @@
-/** 假的 pi：只实现扩展用到的 on / registerCommand / getCommands，按真实顺序发事件。 */
+/** 假的 pi：只实现扩展用到的 on / registerCommand / ctx.ui，按真实顺序发事件。 */
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,6 +78,8 @@ export interface Harness {
 	/** 状态栏里 pi-onward 那一格；写过几次。 */
 	status(): string | undefined;
 	statusWrites: number;
+	/** 用 ctx.ui.addAutocompleteProvider 装上的补全。 */
+	autocomplete: unknown[];
 }
 
 let sessions = 0;
@@ -92,6 +94,7 @@ export function harness(
 	const commands = new Map<string, any>();
 	const sent: string[] = [];
 	const notes: [string, string][] = [];
+	const autocomplete: unknown[] = [];
 	const controller = new AbortController();
 	const sessionId = `session-${++sessions}`;
 	let pending = 0;
@@ -109,6 +112,7 @@ export function harness(
 				if (text === undefined) statuses.delete(key);
 				else statuses.set(key, text);
 			},
+			addAutocompleteProvider: (factory: unknown) => autocomplete.push(factory),
 		},
 	};
 	const pi = {
@@ -156,6 +160,7 @@ export function harness(
 		get statusWrites() {
 			return statusWrites;
 		},
+		autocomplete,
 		set pending(value: number) {
 			pending = value;
 		},

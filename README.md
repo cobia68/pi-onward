@@ -163,7 +163,7 @@ pi install ./pi-onward
 - `set` 全有或全无：任何一项不合法就一项都不改，问题一起说。
 - 值里有空格时加双引号：`/onward set prompt="接着做，第 {attempt} 次"`。
 - 命令不会新增规则，`set rules=…` 会被拒绝。
-- 输入时按 Tab 补全动作、字段名和 `action` 的取值。
+- 输入时按 Tab 补全动作、字段名和 `action` 的取值，选中一项再按 Tab 补下一层；写过的字段不再给，引号里的值不补。
 
 ## ❓ 常见问题
 
@@ -204,5 +204,5 @@ npm run check                # biome + tsc + 测试 + 用 pi 的加载器加载�
 | 目录 | 内容 |
 | :--- | :--- |
 | `src/policy/` | 纯逻辑，不碰 pi 的运行时和文件（只用 pi 的类型）：什么算失败（`failure`）、命中哪条规则（`rules`）、按什么参数（`policy`，一张字段表管校验、帮助和补全）、等多久（`delay`）、什么时候停（`tracker`）；`config` 把它们拼成设置文件的模型 |
-| `src/extension/` | 接 pi：`onward` 处理事件并续跑，`command` 是 `/onward`，`settings` 读写设置文件，`text` 是给人看的文字，`install` 把它们装起来；`index` 是 pi 加载的入口，只决定设置文件放在哪里 |
-| `tests/` | `node:test`，目录与 `src/` 对应；`tests/support/fake-pi.ts` 按 pi 的真实事件顺序发事件，直接装 `install`，不加载 pi 本体。入口和设置文件的位置由 `scripts/check-extension.mjs` 用 pi 自己的加载器检查 |
+| `src/extension/` | 接 pi：`onward` 处理事件并续跑，`command` 是 `/onward`，`autocomplete` 让它的参数里按 Tab 补参数、不补文件名，`settings` 读写设置文件，`text` 是给人看的文字，`install` 把它们装起来；`index` 是 pi 加载的入口，只决定设置文件放在哪里 |
+| `tests/` | `node:test`，目录与 `src/` 对应；`tests/support/fake-pi.ts` 按 pi 的真实事件顺序发事件，直接装 `install`，不加载 pi 本体；补全在 pi-tui 真实的编辑器里按键。入口和设置文件的位置由 `scripts/check-extension.mjs` 用 pi 自己的加载器检查 |

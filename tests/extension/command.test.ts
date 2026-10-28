@@ -78,3 +78,33 @@ test("补全：动作、字段名、action 的取值；写完了就不给", () =
 	assert.equal(completeArguments("status"), null, "写完了：回车直接执行");
 	assert.equal(completeArguments("reload "), null);
 });
+
+test("补全：写过的字段不再给，大小写不敏感", () => {
+	const values = (prefix: string) => completeArguments(prefix)?.map((item) => item.value);
+	assert.equal(completeArguments("set action=resend ac"), null);
+	assert.deepEqual(values("set action=resend "), [
+		"set action=resend prompt=",
+		"set action=resend maxRetries=",
+		"set action=resend maxSameError=",
+		"set action=resend delay=",
+	]);
+	assert.equal(completeArguments("set Action=resend action="), null, "写过的字段也不给取值");
+	assert.deepEqual(values("unset Delay "), [
+		"unset Delay action ",
+		"unset Delay prompt ",
+		"unset Delay maxRetries ",
+		"unset Delay maxSameError ",
+	]);
+});
+
+test("补全：引号里的值不补，正在写的词前面原样保留", () => {
+	const values = (prefix: string) => completeArguments(prefix)?.map((item) => item.value);
+	assert.equal(completeArguments('set prompt="继续 m'), null, "引号没配对：还在写值");
+	assert.equal(completeArguments('set prompt="继续 '), null);
+	assert.equal(completeArguments('set prompt="继续"'), null, "值写完了：回车直接执行");
+	assert.deepEqual(values('set prompt="a  b" ma'), [
+		'set prompt="a  b" maxRetries=',
+		'set prompt="a  b" maxSameError=',
+	]);
+	assert.deepEqual(values("set  a"), ["set  action="]);
+});
