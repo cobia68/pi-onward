@@ -65,6 +65,7 @@ test("补全：动作、字段名、action 的取值；写完了就不给", () =
 		"set maxRetries=",
 		"set maxSameError=",
 		"set delay=",
+		"set --help",
 	]);
 	assert.deepEqual(values("set action="), ["set action=message ", "set action=resend ", "set action=stop "]);
 	assert.deepEqual(values("set maxRetries=5 de"), ["set maxRetries=5 delay="]);
@@ -73,10 +74,20 @@ test("补全：动作、字段名、action 的取值；写完了就不给", () =
 		"unset delay prompt ",
 		"unset delay maxRetries ",
 		"unset delay maxSameError ",
+		"unset delay --help",
 	]);
-	assert.deepEqual(values("show "), ["show rules"]);
+	assert.deepEqual(values("show "), ["show rules", "show --help"]);
 	assert.equal(completeArguments("status"), null, "写完了：回车直接执行");
 	assert.equal(completeArguments("reload "), null);
+});
+
+test("补全：--help 在最前面，set/unset/show 之后也给，写完了就不给", () => {
+	const values = (prefix: string) => completeArguments(prefix)?.map((item) => item.value);
+	assert.deepEqual(values(""), ["status", "on", "off", "show ", "set ", "unset ", "reload", "reset", "--help"]);
+	assert.deepEqual(values("--"), ["--help"]);
+	assert.equal(completeArguments("--help"), null, "写完了：回车直接执行");
+	assert.equal(completeArguments("set --help"), null);
+	assert.deepEqual(values("set --"), ["set --help"]);
 });
 
 test("补全：写过的字段不再给，大小写不敏感", () => {
@@ -87,6 +98,7 @@ test("补全：写过的字段不再给，大小写不敏感", () => {
 		"set action=resend maxRetries=",
 		"set action=resend maxSameError=",
 		"set action=resend delay=",
+		"set action=resend --help",
 	]);
 	assert.equal(completeArguments("set Action=resend action="), null, "写过的字段也不给取值");
 	assert.deepEqual(values("unset Delay "), [
@@ -94,6 +106,7 @@ test("补全：写过的字段不再给，大小写不敏感", () => {
 		"unset Delay prompt ",
 		"unset Delay maxRetries ",
 		"unset Delay maxSameError ",
+		"unset Delay --help",
 	]);
 });
 

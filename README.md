@@ -158,12 +158,12 @@ pi install ./pi-onward
 | `/onward unset 字段 …` | 去掉参数，退回内置默认值，例如 `unset delay` |
 | `/onward reload` | 重新读设置文件 |
 | `/onward reset` | 去掉 `enabled` 和顶层的参数，保留手写的 `rules` |
-| `/onward --help` | 用法 |
+| `/onward --help` | 用法；加在任意动作后面（如 `/onward set --help`）也只显示用法，不执行动作 |
 
 - `set` 全有或全无：任何一项不合法就一项都不改，问题一起说。
 - 值里有空格时加双引号：`/onward set prompt="接着做，第 {attempt} 次"`。
 - 命令不会新增规则，`set rules=…` 会被拒绝。
-- 输入时按 Tab 补全动作、字段名和 `action` 的取值，选中一项再按 Tab 补下一层；写过的字段不再给，引号里的值不补。
+- 输入时按 Tab 补全动作、`--help`、字段名和 `action` 的取值，选中一项再按 Tab 补下一层；`--help` 在动作前以及 `show`、`set`、`unset` 后面都给，写过的字段不再给，引号里的值不补。
 
 ## ❓ 常见问题
 

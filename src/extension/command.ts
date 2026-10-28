@@ -1,6 +1,6 @@
 /**
  * `/onward <动作> [参数]`：动作在前，参数写成 `字段=值`，字段名和设置文件一样。`set` 全有或全无：任何一项
- * 不合法就一项都不写。
+ * 不合法就一项都不写。`--help` 写在哪都只显示帮助，不执行动作；补全在动作前以及 show、set、unset 之后都给出它。
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isActive } from "../policy/config.ts";
@@ -40,7 +40,13 @@ const ACTIONS: readonly { name: string; args: string; description: string }[] = 
 const DESCRIPTION = `出错后按规则自动续跑：/${COMMAND} [${ACTIONS.map((item) => item.name).join("|")}|--help]`;
 
 const USAGE = [
-	...ACTIONS.map((item) => `/${COMMAND} ${pad(`${item.name} ${item.args}`, 18)}${item.description}`),
+	"onward — 出错后按规则自动续跑",
+	`用法：/${COMMAND} [动作] [字段=值 …]`,
+	"",
+	"动作：",
+	...ACTIONS.map((item) => `  ${pad(`${item.name} ${item.args}`, 16)}${item.description}`),
+	"",
+	`  /${COMMAND} <动作> --help 只显示这份帮助，不执行动作`,
 	"",
 	"字段：",
 	...FIELDS.map((item) => `  ${item.name.padEnd(13)}${item.syntax}　${item.description}`),
@@ -230,9 +236,12 @@ interface Candidate {
 	more: boolean;
 }
 
+/** 动作前以及 show、set、unset 之后都给：选中即完成，回车只看帮助。 */
+const HELP: Candidate = { value: "--help", description: "显示帮助", more: false };
+
 /**
- * 补全：动作、show 的 rules、set 和 unset 的字段名、action 的取值；写过的字段和引号里的值不补，都写完了就不给，
- * 回车直接执行。返回的 value 换掉「/onward 」后面的全部文字，正在写的词前面原样保留。
+ * 补全：动作、show 的 rules、set 和 unset 的字段名、action 的取值，加上 --help；写过的字段和引号里的值不补，
+ * 都写完了就不给，回车直接执行。返回的 value 换掉「/onward 」后面的全部文字，正在写的词前面原样保留。
  */
 export function completeArguments(prefix: string): { value: string; label: string; description: string }[] | null {
 	const { words, start } = scan(prefix);
@@ -253,23 +262,30 @@ function candidates(words: string[], current: string): Candidate[] {
 	const [first, ...rest] = words;
 	const action = first?.toLowerCase();
 	if (action === undefined)
-		return ACTIONS.map((item) => ({ value: item.name, description: item.description, more: item.args !== "" }));
-	if (action === "show" && !rest.length) return [{ value: "rules", description: "只看规则", more: false }];
+		return [
+			...ACTIONS.map((item) => ({ value: item.name, description: item.description, more: item.args !== "" })),
+			HELP,
+		];
+	if (action === "show" && !rest.length) return [{ value: "rules", description: "只看规则", more: false }, HELP];
 	if (action !== "set" && action !== "unset") return [];
 	// 写过的字段不再给：再写一次，执行时会被拒绝。
 	const written = new Set(rest.map((word) => fieldNamed(word.split("=")[0])?.name));
 	const unwritten = FIELDS.filter((item) => !written.has(item.name));
 	if (action === "unset")
-		return unwritten.map((item) => ({ value: item.name, description: item.description, more: true }));
+		return [...unwritten.map((item) => ({ value: item.name, description: item.description, more: true })), HELP];
 	const equals = current.indexOf("=");
 	if (equals < 0)
-		return unwritten.map((item) => ({
-			value: `${item.name}=`,
-			description: `${item.syntax}：${item.description}`,
-			more: true,
-		}));
+		return [
+			...unwritten.map((item) => ({
+				value: `${item.name}=`,
+				description: `${item.syntax}：${item.description}`,
+				more: true,
+			})),
+			HELP,
+		];
 	const known = fieldNamed(current.slice(0, equals));
 	if (!known || written.has(known.name)) return [];
+	// 正在写的词是 字段=值 的一部分，--help 匹配不上就不再列出：下一个词的边界上会给。
 	return (known.choices ?? []).map((choice) => ({
 		value: `${known.name}=${choice.value}`,
 		description: choice.description,
