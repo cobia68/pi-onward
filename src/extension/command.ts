@@ -13,6 +13,7 @@ import type { Settings, SettingsChange } from "./settings.ts";
 import {
 	COMMAND,
 	changedNotice,
+	columns,
 	commandErrorNotice,
 	info,
 	type Notice,
@@ -159,12 +160,12 @@ async function choose(ctx: ExtensionContext, settings: Settings): Promise<string
 	return undefined;
 }
 
-/** 每个动作一项，最后是 --help；和帮助里的动作表同一个写法。`fill`：参数非写不可。 */
+/** 每个动作一项，最后是 --help；和帮助里的动作表一样只写名字，参数留给各自动作的帮助。`fill`：参数非写不可。 */
 export function menuItems(): { label: string; input: string; fill: boolean }[] {
-	const labels = table(
-		[...ACTIONS.map((item): [string, string] => [usage(item), item.description]), [HELP, "显示帮助"]],
-		0,
-	);
+	const labels = columns([
+		...ACTIONS.map((item): [string, string] => [item.name, item.description]),
+		[HELP, "显示帮助"],
+	]);
 	return [
 		...ACTIONS.map((item, index) => ({
 			label: labels[index]!,
@@ -328,7 +329,7 @@ function overallHelp(): string {
 	return [
 		"onward — 出错后按规则自动续跑",
 		`用法：/${COMMAND} [动作] [参数] [${HELP}]`,
-		...section("动作", table(ACTIONS.map((item) => [usage(item), item.description]))),
+		...section("动作", table(ACTIONS.map((item) => [item.name, item.description]))),
 		"",
 		"  不写动作时弹出菜单，标题是现在的状态",
 		`  每个动作的用法：/${COMMAND} <动作> ${HELP}（只显示帮助，不执行）`,
@@ -415,19 +416,24 @@ interface Candidate {
  * 选中的词后面还能接着写时补一个空格，下一下 Tab 补下一层；`字段=` 停在 = 后面写值。写了 --help 就结束了，
  * 什么都不再给。写完的词不给列表，回车直接执行；写过的字段和引号里的值不补。
  */
-export function completeArguments(prefix: string): { value: string; label: string; description: string }[] | null {
+export function completeArguments(prefix: string): { value: string; label: string }[] | null {
 	const { words, start } = scan(prefix);
 	const current = prefix.slice(start);
 	if (current.includes('"')) return null;
 	const head = prefix.slice(0, start);
 	const done = current ? words.slice(0, -1) : words;
-	const shown = candidates(done, current).filter((item) => item.value.toLowerCase().startsWith(current.toLowerCase()));
-	if (!shown.length || shown.some((item) => item.value.toLowerCase() === current.toLowerCase())) return null;
+	const all = candidates(done, current);
+	// 说明写进 label，不另给 description：pi 的参数补全把名字列固定留 32 格，说明会隔开一大截。
+	// 列宽按这一层的全部候选算，不按过滤后的：边打字边过滤时说明不左右跳。
+	const labels = columns(all.map((item): [string, string] => [item.value, item.description]));
+	const shown = all.flatMap((item, index) =>
+		item.value.toLowerCase().startsWith(current.toLowerCase()) ? [{ item, label: labels[index]! }] : [],
+	);
+	if (!shown.length || shown.some(({ item }) => item.value.toLowerCase() === current.toLowerCase())) return null;
 	const spaced = (item: Candidate) => !item.value.endsWith("=") && candidates([...done, item.value], "").length > 0;
-	return shown.map((item) => ({
+	return shown.map(({ item, label }) => ({
 		value: `${head}${item.value}${spaced(item) ? " " : ""}`,
-		label: item.value,
-		description: item.description,
+		label,
 	}));
 }
 

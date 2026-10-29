@@ -43,17 +43,25 @@ const addRules = (where = "设置文件") => `在${where}的 rules 里写规则�
 
 // ── 排版 ──
 
-/** 名字一列、内容一列，按终端里的宽度对齐；内容的后几行对齐在第一行下面。`indent`：行首空几格。 */
-export function table(rows: [name: string, text: string][], indent = 2): string[] {
+/** 帮助和状态里的表：行首空两格，名字一列、内容一列，按终端里的宽度对齐；内容的后几行对齐在第一行下面。 */
+export function table(rows: [name: string, text: string][]): string[] {
 	const width = Math.max(0, ...rows.map(([name]) => cells(name)));
-	const lead = " ".repeat(indent);
 	return rows.flatMap(([name, text]) => {
 		const [first, ...more] = text.split("\n");
 		return [
-			`${lead}${name}${" ".repeat(width - cells(name))}  ${first}`,
-			...more.map((line) => `${lead}${" ".repeat(width)}  ${line}`),
+			`  ${name}${" ".repeat(width - cells(name))}  ${first}`,
+			...more.map((line) => `  ${" ".repeat(width)}  ${line}`),
 		];
 	});
+}
+
+/**
+ * 菜单和补全的每一项：名字一列、说明一列，按终端里的宽度对齐。说明里的换行换成空格，所以一项正好一行，
+ * 返回的第几行就是第几项，调用方按下标取回。
+ */
+export function columns(rows: [name: string, text: string][]): string[] {
+	const width = Math.max(0, ...rows.map(([name]) => cells(name)));
+	return rows.map(([name, text]) => `${name}${" ".repeat(width - cells(name))}  ${text.replace(/\s*\n\s*/g, " ")}`);
 }
 
 /** 有内容才出这一节，前面空一行。 */

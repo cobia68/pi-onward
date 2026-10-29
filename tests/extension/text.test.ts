@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderContinue } from "../../src/extension/render.ts";
-import { continueLabel, describeDelay, describeRules } from "../../src/extension/text.ts";
+import { columns, continueLabel, describeDelay, describeRules } from "../../src/extension/text.ts";
 import { parseConfig } from "../../src/policy/config.ts";
 import { parseDelay } from "../../src/policy/delay.ts";
 import { type Policy, resolvePolicy } from "../../src/policy/policy.ts";
@@ -59,6 +59,18 @@ test("规则：没有时说怎么加；有问题时只列问题", () => {
 		describeRules(parseConfig({ rules: [{ name: "auth", when: { error: "401" } }, { when: { x: 1 } }] })),
 		"设置文件有 1 处问题，修好之前不会自动续跑：\n- rules[1]（rule-2）.when.x 不认识\n改完 /onward reload",
 	);
+});
+
+test("菜单和补全的一项正好一行：说明里的换行换成空格，说明按终端宽度对齐", () => {
+	assert.deepEqual(
+		columns([
+			["status", "现在的状态"],
+			["on", "打开\n  再续跑"],
+			["中文", "占两格"],
+		]),
+		["status  现在的状态", "on      打开 再续跑", "中文    占两格"],
+	);
+	assert.deepEqual(columns([]), []);
 });
 
 test("续跑消息：标签写第几次和哪条规则，记录不全时退回只写名字", () => {

@@ -44,6 +44,16 @@ test("总帮助列出每个动作，字段留给 set --help", () => {
 	assert.match(overall, /字段和默认值：\/onward set --help/);
 	assert.match(overall, /不写动作时弹出菜单/);
 	assert.doesNotMatch(overall, /maxSameError/);
+	// 动作表只写名字，参数的写法留给各自动作的帮助。
+	assert.doesNotMatch(overall, /字段=值/);
+	assert.doesNotMatch(overall, /\[rules\]/);
+	// 说明对齐在同一列：按终端里的宽度量，中文占两格。
+	const rows = overall
+		.split(/\n/)
+		.filter((line) => /^ {2}\S/.test(line))
+		.slice(0, ACTIONS.length);
+	const column = (line: string) => cells(line.slice(0, line.search(/\s{2}\S/)));
+	assert.equal(new Set(rows.map(column)).size, 1);
 });
 
 test("每个动作有自己的帮助：用法、说明；set、unset 列出字段和默认值", () => {
@@ -197,6 +207,33 @@ test("补全：动作、字段名、action 的取值；后面还能写的补一�
 	assert.deepEqual(values("show "), ["show rules ", "show --help"]);
 	assert.equal(completeArguments("status"), null, "写完了：回车直接执行");
 	assert.equal(completeArguments("set action=resend"), null);
+});
+
+test("补全：说明折进 label 里对齐在同一列，不给 pi 另拉宽的 description", () => {
+	const column = (label: string) => cells(label.slice(0, label.search(/\s{2}\S/)));
+	for (const prefix of ["", "set ", "set action=", "unset delay "]) {
+		const items = completeArguments(prefix);
+		assert.ok(items, prefix);
+		assert.equal(
+			items.some((item) => "description" in item),
+			false,
+			prefix,
+		);
+		assert.equal(new Set(items.map((item) => column(item.label))).size, 1, prefix);
+		// 每一行写的名字就是选中后补上的那个词：显示的和插入的不错位。
+		for (const item of items)
+			assert.equal(item.label.split(/\s{2,}/)[0], item.value.trim().split(/\s+/).at(-1), prefix);
+	}
+	assert.match(completeArguments("")!.find((item) => item.value === "status ")!.label, /^status {2}现在/);
+	assert.match(completeArguments("set ")!.find((item) => item.value === "set action=")!.label, /^action= {8}message/);
+});
+
+test("补全：列宽按这一层的全部候选算，边打字边过滤时说明不左右跳", () => {
+	const label = (prefix: string, value: string) =>
+		completeArguments(prefix)?.find((item) => item.value === value)?.label;
+	assert.equal(label("o", "on "), label("", "on "), "只剩 on、off 时仍按 status、reload 的宽度");
+	assert.equal(label("set d", "set delay="), label("set ", "set delay="), "只剩 delay= 时仍按 maxSameError= 的宽度");
+	assert.match(label("o", "on ")!, /^on {6}打开$/);
 });
 
 test("补全：每个动作后面都给 --help；写了 --help 就什么都不给，有没有空格都一样", () => {

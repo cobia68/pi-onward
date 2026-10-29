@@ -58,12 +58,12 @@ test("命令名后面按 Tab：列出动作，不列文件", async () => {
 	const top = await tab("/onward ");
 	assert.equal(top.text, "/onward ");
 	assert.equal(top.listed, true, "紧跟在命令名后面也列出来");
-	assert.match(top.menu, /→ status/);
+	assert.match(top.menu, /→ status {2}现在/, "说明紧跟在名字后面，不拉到固定宽度");
 	const some = await tab("/onward s");
 	assert.equal(some.text, "/onward s", "不补成 /onward status-notes/");
 	assert.equal(some.listed, true);
 	assert.match(some.menu, /→ status/);
-	assert.match(some.menu, /^ {2}show/m);
+	assert.match(some.menu, /^ {2}show {4}各项/m, "说明对齐在同一列");
 	assert.doesNotMatch(some.menu, /status-notes/);
 });
 
@@ -73,7 +73,7 @@ test("补完一层接着按 Tab，补下一层", async () => {
 	const fields = await tab("/onward se", 2);
 	assert.equal(fields.text, "/onward set ");
 	assert.equal(fields.listed, true);
-	assert.match(fields.menu, /→ action=/);
+	assert.match(fields.menu, /→ action= {8}message/, "说明紧跟在最长的字段名后面");
 	assert.doesNotMatch(fields.menu, /status-notes/);
 	assert.equal((await tab("/onward set a")).text, "/onward set action=");
 	const choices = await tab("/onward set a", 2);
