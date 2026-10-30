@@ -23,20 +23,9 @@
 pi install npm:@cobia/pi-onward
 ```
 
-或者从 Git 仓库装：
+以前从 Git 仓库或本地目录装过的，先用 `pi list` 找到原来的来源，`pi remove <来源>` 删掉再装；在 `defaultSubagentOnlyExtensions` 里写过入口路径的，按[常见问题](#-常见问题)里 subagent 那一条改成新的位置。
 
-```bash
-pi install git:github.com/cobia68/pi-onward
-```
-
-或者从本地目录装（没有运行时依赖，不需要 `npm ci`）：
-
-```bash
-git clone https://github.com/cobia68/pi-onward.git
-pi install ./pi-onward
-```
-
-重开 pi 或输入 `/reload`，再输入 `/onward status`：看到「💤 onward：开，但没有可用的规则…」就是装好了。这时出错还不会续跑：把仓库里的 [`example.json`](example.json) 复制成 `~/.pi/agent/onward.json`（已有的话先备份），再 `/onward reload`。它的规则就是下面的[常见规则](#-常见规则)。
+重开 pi 或输入 `/reload`，再输入 `/onward status`：看到「💤 onward：开，但没有可用的规则…」就是装好了。这时出错还不会续跑：把包里的 [`example.json`](example.json)（装在 `~/.pi/agent/npm/node_modules/@cobia/pi-onward/example.json`）复制成 `~/.pi/agent/onward.json`（已有的话先备份），再 `/onward reload`。它的规则就是下面的[常见规则](#-常见规则)。
 
 ## ⚙️ 工作方式
 
@@ -240,13 +229,13 @@ pi 自带的重试（`settings.json` 的 `retry`）先跑，它只处理瞬时�
 {
   "subagents": {
     "defaultSubagentOnlyExtensions": [
-      "~/.pi/agent/git/github.com/cobia68/pi-onward/src/extension/index.ts"
+      "~/.pi/agent/npm/node_modules/@cobia/pi-onward/src/extension/index.ts"
     ]
   }
 }
 ```
 
-路径指向装好的 pi-onward 入口：用 `pi install git:...` 装的在上面这个位置，从本地目录装的就写那个目录下的 `src/extension/index.ts`。写了自己 `subagentOnlyExtensions` 的 agent 不吃这个默认值，要把路径加进它自己的列表。
+路径指向 `pi install npm:@cobia/pi-onward` 装好的入口。写了自己 `subagentOnlyExtensions` 的 agent 不吃这个默认值，要把路径加进它自己的列表。
 
 后台子会话因此可能加载两份 pi-onward（指向同一个文件时 pi 会去重）；即使是两份不同的副本，同一个会话里也只有先加载的那份干活，不会续跑两次。子会话没有界面，续跑和停手都不弹提示。
 
