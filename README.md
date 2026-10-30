@@ -20,6 +20,12 @@
 | Node.js | 22.19.0 或更高    |
 
 ```bash
+pi install npm:@cobia/pi-onward
+```
+
+或者从 Git 仓库装：
+
+```bash
 pi install git:github.com/cobia68/pi-onward
 ```
 
