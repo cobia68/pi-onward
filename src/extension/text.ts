@@ -11,7 +11,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Config, Hit } from "../policy/config.ts";
 import { formatDelay, retryDelay, totalDelay } from "../policy/delay.ts";
-import { errorSignature, type Failure } from "../policy/failure.ts";
+import { EMPTY_REPLY, errorSignature, type Failure } from "../policy/failure.ts";
 import { DEFAULT_POLICY, FIELDS, type Field, type Policy, resolvePolicy } from "../policy/policy.ts";
 import type { Rule } from "../policy/rules.ts";
 import type { GiveUp, Progress, Retry } from "../policy/tracker.ts";
@@ -231,11 +231,12 @@ export function describeRules(config: Config): string {
 			...table(rows).map((line) => ` ${line}`),
 		];
 	});
-	return ["规则（按顺序，第一条命中的生效；没命中的错误不处理）", ...blocks.flat()].join("\n");
+	return ["规则（按顺序，第一条命中的生效；没命中的错误和空回复不处理）", ...blocks.flat()].join("\n");
 }
 
 function describeWhen({ when }: Rule): string {
 	const parts = [
+		when.empty && "空回复",
 		when.error && `错误匹配 /${when.error.source}/i`,
 		when.provider && `provider=${when.provider}`,
 		when.model && `model=${when.model}`,
@@ -269,11 +270,14 @@ export function startupNotices(settings: Settings): Notice[] {
 	return [];
 }
 
-/** 和状态栏同一个写法：`⏩ onward：续跑 1/20 · auth，3 秒后静默重发`。错误本身 pi 已经显示过了。 */
-/** 状态栏已经写了第几次、哪条规则，这里只说接下来做什么：`onward：3 秒后静默重发`。 */
-export function retryNotice(step: Retry, draft: Continue): Notice {
+/**
+ * 状态栏已经写了第几次、哪条规则，这里只说接下来做什么：`onward：3 秒后静默重发`。出错时 pi 已经显示过错误；
+ * 空回复 pi 什么都不显示，所以先说一句：`onward：空回复，3 秒后发「继续」`。
+ */
+export function retryNotice(step: Retry, draft: Continue, failure: Failure): Notice {
 	const action = draft.type === "context_edit" ? "静默重发" : `发「${truncate(draft.content, 30)}」`;
-	return info(`onward：${formatDelay(step.delay)}后${action}`);
+	const what = failure.stopReason === "stop" ? `${EMPTY_REPLY}，` : "";
+	return info(`onward：${what}${formatDelay(step.delay)}后${action}`);
 }
 
 /** 状态栏已经写了停了、哪条规则，这里只说为什么停、怎么办。 */

@@ -1,5 +1,6 @@
 /**
- * pi-onward：一轮以错误收尾（401、429、502、Connection error. 等）时，按用户写的规则续跑。没有内置规则。
+ * pi-onward：一轮以错误收尾（401、429、502、Connection error. 等）、或者正常结束却是空回复时，按用户写的规则续跑。
+ * 没有内置规则。
  *
  * - `policy/`：纯逻辑，不碰 pi 的运行时和文件。什么算失败、命中哪条规则、按什么参数、等多久、什么时候停。
  * - `extension/`：接 pi。`onward` 处理事件并续跑，`command` 是 `/onward`，`autocomplete` 让它的参数里按 Tab 补参数，

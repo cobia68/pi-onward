@@ -37,7 +37,7 @@ test("规则：每条一块，条件、做法、上限、间隔各一行；stop 
 	assert.equal(
 		text,
 		[
-			"规则（按顺序，第一条命中的生效；没命中的错误不处理）",
+			"规则（按顺序，第一条命中的生效；没命中的错误和空回复不处理）",
 			"1. auth",
 			"   条件  错误匹配 /401/i，provider=welfare-*",
 			"   做法  静默重发同一个请求",
@@ -48,6 +48,13 @@ test("规则：每条一块，条件、做法、上限、间隔各一行；stop 
 			"   做法  命中就停，只提醒，不续跑",
 		].join("\n"),
 	);
+});
+
+test("规则：when.empty 的条件写成「空回复」", () => {
+	const text = describeRules(
+		parseConfig({ rules: [{ name: "empty", when: { empty: true, provider: "welfare-*" } }] }),
+	);
+	assert.match(text, /\n1\. empty\n {3}条件 {2}空回复，provider=welfare-\*\n/);
 });
 
 test("规则：没有时说怎么加；有问题时只列问题", () => {

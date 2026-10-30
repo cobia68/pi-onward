@@ -1,7 +1,7 @@
 {
   "name": "@cobia/pi-onward",
-  "version": "0.1.1",
-  "description": "Keep a pi run going after it ends in an error: user-written rules decide whether to send a visible message or silently resend, with per-rule budgets, backoff and a same-error stop.",
+  "version": "0.1.2",
+  "description": "Keep a pi run going after it ends in an error or an empty reply: user-written rules decide whether to send a visible message or silently resend, with per-rule budgets, backoff and a same-error stop.",
   "keywords": [
     "pi",
     "pi-package",

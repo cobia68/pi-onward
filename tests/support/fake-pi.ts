@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { install } from "../../src/extension/install.ts";
-import type { AgentMessage, Failure } from "../../src/policy/failure.ts";
+import type { AgentMessage, EmptyReply, Failure } from "../../src/policy/failure.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
 type Assistant = Extract<AgentMessage, { role: "assistant" }>;
@@ -42,6 +42,9 @@ export const assistant = (extra: Partial<Assistant> = {}): Assistant => ({
 export const err = (errorMessage = "401 Invalid API key", extra: Partial<Assistant> = {}): Failure =>
 	assistant({ errorMessage, ...extra, stopReason: "error" }) as Failure;
 export const ok = () => assistant({ content: [{ type: "text", text: "done" }] });
+/** 正常结束但什么都没生成：中转偶尔会这样返回。 */
+export const empty = (extra: Partial<Assistant> = {}): EmptyReply =>
+	assistant({ content: [], ...extra, stopReason: "stop" }) as EmptyReply;
 export const tool = () => assistant({ stopReason: "toolUse" });
 export const aborted = () => assistant({ stopReason: "aborted", errorMessage: "Operation aborted" });
 

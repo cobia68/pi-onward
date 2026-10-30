@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { matchFailure, parseConfig } from "../src/policy/config.ts";
 import { DEFAULT_POLICY } from "../src/policy/policy.ts";
-import { err } from "./support/fake-pi.ts";
+import { empty, err } from "./support/fake-pi.ts";
 
 const readText = (file: string) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 
@@ -44,6 +44,11 @@ test("README 常见规则：可直接使用，常见错误各归其位", () => {
 	assert.equal(hit("prompt is too long")?.policy.action, "stop");
 	assert.equal(hit("401 Invalid API key")?.policy.action, "resend");
 	assert.equal(hit("400 Invalid tool schema")?.policy.action, "message");
+
+	const blank = matchFailure(config, empty());
+	assert.equal(blank?.rule.name, "empty", "空回复");
+	assert.equal(blank?.policy.action, "message");
+	assert.equal(blank?.policy.prompt, "继续");
 });
 
 test("example.json：解析无问题，顶层参数就是内置默认值，rules 与 README 一致", () => {

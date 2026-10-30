@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { aborted, boundaryEvent, err, harness, ok, tool } from "../support/fake-pi.ts";
+import { aborted, boundaryEvent, empty, err, harness, ok, tool } from "../support/fake-pi.ts";
 
 /** 兜底规则：没有内置规则，测试里要自己写。 */
 const any = [{ name: "any" }];
@@ -193,4 +193,38 @@ test("stop 规则里的键拼错了：整份设置不生效，额度错误不会
 	assert.equal(await h.boundary(err("502 upstream")), undefined);
 	assert.deepEqual(h.sent, []);
 	assert.match(await h.command("show rules"), /^设置文件有 1 处问题[\s\S]*- rules\[0\]（quota）\.acton 不认识/);
+});
+
+test("空回复：when.empty 的规则发「继续」，提示里说是空回复；空回复不算恢复，次数照算", async () => {
+	const h = harness({ config: { delay: "0s", rules: [{ name: "empty", when: { empty: true }, maxRetries: 2 }] } });
+	assert.equal((await h.boundary(empty()))?.continue, true);
+	assert.match(h.notes.at(-1)![1], /^onward：空回复，0 毫秒后发「继续」$/);
+	assert.equal((await h.boundary(empty()))?.continue, true);
+	assert.equal(await h.boundary(empty()), undefined);
+	assert.deepEqual(h.sent, ["继续", "继续"]);
+	assert.match(h.warnings()[0], /已续跑 2 次仍未恢复/);
+});
+
+test("空回复：没有 when.empty 的规则时不处理，不带 when 的兜底也不管", async () => {
+	const h = harness(fast());
+	assert.equal(await h.boundary(empty()), undefined);
+	assert.deepEqual(h.sent, []);
+});
+
+test("静默重发之后收到空回复：接着发「继续」，不当成已经恢复", async () => {
+	const h = harness({
+		config: {
+			delay: "0s",
+			rules: [
+				{ name: "auth", when: { error: "401" }, action: "resend", maxRetries: 1 },
+				{ name: "empty", when: { empty: true } },
+			],
+		},
+	});
+	assert.equal((await h.boundary(err("401 Invalid API key")))?.continue, true);
+	assert.equal((await h.boundary(empty()))?.continue, true);
+	assert.deepEqual(h.sent, ["继续"]);
+	// 空回复不算恢复：auth 用过的次数还在，再来 401 就到上限。
+	assert.equal(await h.boundary(err("401 Invalid API key")), undefined);
+	assert.match(h.warnings()[0], /已续跑 1 次仍未恢复/);
 });

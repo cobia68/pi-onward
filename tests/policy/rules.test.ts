@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { findRule, glob, parseRules } from "../../src/policy/rules.ts";
-import { err } from "../support/fake-pi.ts";
+import { empty, err } from "../support/fake-pi.ts";
 
 const rulesOf = (raw: unknown) => {
 	const problems: string[] = [];
@@ -25,6 +25,29 @@ test("按顺序第一条命中；没命中的错误不处理；停用的跳过",
 	assert.equal(findRule(rules, err("401 Invalid API key"))?.name, "auth");
 	assert.equal(findRule(rules, err("429 rate limited"))?.name, "relay");
 	assert.equal(findRule(rules, err("429 rate limited", { provider: "openai" })), undefined);
+});
+
+test("空回复只落到 when.empty 的规则；不带 when 的兜底只管出错，不管空回复", () => {
+	const { rules, problems } = rulesOf([
+		{ name: "empty", when: { empty: true } },
+		{ name: "relay-empty", when: { empty: true, provider: "other-*" } },
+		{ name: "fallback" },
+	]);
+	assert.deepEqual(problems, []);
+	assert.equal(findRule(rules, empty())?.name, "empty");
+	assert.equal(findRule(rules, err("502"))?.name, "fallback");
+	assert.equal(findRule(rulesOf([{ name: "fallback" }]).rules, empty()), undefined);
+	assert.equal(findRule(rules.slice(1), empty({ provider: "other-relay" }))?.name, "relay-empty");
+	assert.equal(findRule(rules.slice(1), empty()), undefined, "provider 不对");
+});
+
+test("when.empty 只能写 true，不能和 when.error 一起写", () => {
+	assert.deepEqual(rulesOf([{ name: "a", when: { empty: false } }]).problems, [
+		"rules[0]（a）.when.empty 只能是 true；不写就是管出错",
+	]);
+	assert.deepEqual(rulesOf([{ name: "b", when: { empty: true, error: "401" } }]).problems, [
+		"rules[0]（b）.when 里 empty 和 error 不能一起写：空回复没有错误文案",
+	]);
 });
 
 test("通配只认 *，大小写不敏感，整串匹配", () => {

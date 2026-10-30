@@ -1,5 +1,5 @@
 /**
- * 一轮以错误收尾、命中规则时，在 `agent_before_settle` 边界上等一会儿，再要 pi 接着跑：
+ * 一轮以错误收尾、或者正常结束却是空回复，并且命中规则时，在 `agent_before_settle` 边界上等一会儿，再要 pi 接着跑：
  *  - message：追加一条看得见的消息（默认「继续」），模型照常读到；
  *  - resend：用 `context_edit` 把失败的那条从模型上下文里省略，重发同一个请求。失败的记录仍留在会话里。
  *
@@ -75,7 +75,7 @@ export class Onward {
 	}
 
 	messageEnd(event: MessageEndEvent, ctx: Ctx): void {
-		// 续跑之后只要正常返回过一次就算恢复了：后面再出错是新的一串，次数从头算。
+		// 续跑之后只要正常返回过一次就算恢复了：后面再出错是新的一串，次数从头算。空回复不算正常返回。
 		if (this.owns(ctx) && isSuccess(event.message)) this.reset(ctx);
 	}
 
@@ -103,7 +103,7 @@ export class Onward {
 						display: true,
 						details: { rule: hit.rule.name, attempt: step.attempt, max: hit.policy.maxRetries },
 					};
-		say(ctx, retryNotice(step, draft));
+		say(ctx, retryNotice(step, draft, hit.failure));
 		this.setStatus(ctx, "retrying", retryStatus(hit, step));
 		if (await this.wait(step.delay, ctx.signal)) return undefined;
 		// 等的时候用户发了消息：pi 会接着处理它，这算用户开的新一轮。

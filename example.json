@@ -53,6 +53,14 @@
       "action": "resend"
     },
     {
+      "name": "empty",
+      "when": {
+        "empty": true
+      },
+      "action": "message",
+      "maxRetries": 3
+    },
+    {
       "name": "fallback",
       "action": "message",
       "prompt": "上一步出错了（{error}），接着做",
