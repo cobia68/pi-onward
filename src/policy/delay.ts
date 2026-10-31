@@ -13,6 +13,13 @@ export type Delay = { kind: "list"; steps: readonly number[] } | { kind: "ramp";
 export const DELAY_SYNTAX = "5s,10s,30s 或 3s..15s";
 const MALFORMED = `写成 ${DELAY_SYNTAX}，每个值带单位 ms、s 或 m`;
 
+/**
+ * JSON Schema 里的写法：单个值、逗号分隔的列表，或者 `起步..封顶`，每个值带单位。只管写法：封顶不小于起步、最多
+ * 几个值、每个值不超过一小时，由 parseDelay 检查。
+ */
+const DURATION = "\\d+(\\.\\d+)?(ms|s|m)";
+export const DELAY_PATTERN = `^\\s*(${DURATION}\\.\\.${DURATION}|${DURATION}(\\s*,\\s*${DURATION})*)\\s*$`;
+
 /** 合法时返回间隔，否则返回原因。 */
 export function parseDelay(text: string): Delay | string {
 	const value = text.trim();
@@ -69,10 +76,10 @@ export function formatDelay(ms: number): string {
 
 const UNIT_MS = { ms: 1, s: 1000, m: 60_000 } as const;
 
-/** `500ms` / `1.5s` / `2m` → 毫秒；必须带单位，超过一小时的不收。 */
+/** `500ms` / `1.5s` / `2m` → 毫秒；必须带单位，单位小写，超过一小时的不收。 */
 function parseDuration(text: string): number | undefined {
-	const match = /^(\d+(?:\.\d+)?)(ms|s|m)$/i.exec(text);
+	const match = /^(\d+(?:\.\d+)?)(ms|s|m)$/.exec(text);
 	if (!match) return undefined;
-	const ms = Math.round(Number(match[1]) * UNIT_MS[match[2]!.toLowerCase() as keyof typeof UNIT_MS]);
+	const ms = Math.round(Number(match[1]) * UNIT_MS[match[2] as keyof typeof UNIT_MS]);
 	return ms <= MAX_DELAY_MS ? ms : undefined;
 }

@@ -3,7 +3,7 @@ import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Settings } from "../../src/extension/settings.ts";
-import { harness, tempDir, writeConfig } from "../support/fake-pi.ts";
+import { harness, paths, tempDir, writeConfig } from "../support/fake-pi.ts";
 
 const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 
@@ -62,7 +62,7 @@ test("坏 JSON：不续跑、拒绝写、提示", async () => {
 	assert.doesNotMatch(await h.command("status"), /最多 5 次/, "没有改");
 	assert.match(await h.command("reset"), /未做任何修改$/);
 	assert.equal(readFileSync(path, "utf8"), "{ not json", "原文件没被覆盖");
-	assert.equal(new Settings(path).reset().kind, "broken");
+	assert.equal(new Settings(paths(path)).reset("global").kind, "broken");
 });
 
 test("顶层不是对象：和坏 JSON 一样，不当成空设置，也不被命令覆盖", async () => {
@@ -79,7 +79,7 @@ test("顶层不是对象：和坏 JSON 一样，不当成空设置，也不被�
 test("内容有问题：启动和状态都说清不会续跑；命令照常合并写入，修好就生效", async () => {
 	const h = harness({ config: { enabled: "yes", rules: [{ name: "any" }] } });
 	await h.emit("session_start", { reason: "startup" });
-	assert.match(h.warnings()[0], /设置文件有 1 处问题，修好之前不会自动续跑/);
+	assert.equal(h.warnings()[0], `🛑 onward：${h.configPath} 有 1 处问题，修好之前不会自动续跑（/onward show 查看）`);
 	assert.match(await h.command("status"), /^🛑 onward：开，但设置文件有 1 处问题/);
 	assert.equal(h.notes.at(-1)![0], "warning");
 	assert.match(await h.command("on"), /^⏩ onward：开，1 条规则生效/);
@@ -88,7 +88,7 @@ test("内容有问题：启动和状态都说清不会续跑；命令照常合�
 	// 关着也提醒：可能就是要关掉的那一项写错了。
 	const off = harness({ config: { enabled: false, maxRetries: 0 } });
 	await off.emit("session_start", { reason: "startup" });
-	assert.match(off.warnings()[0], /设置文件有 1 处问题/);
+	assert.match(off.warnings()[0], /onward\.json 有 1 处问题/);
 	assert.match(await off.command("status"), /^🛑 onward：关；设置文件有 1 处问题/);
 });
 
@@ -97,15 +97,15 @@ test("show：每个参数的值和来源，再是规则", async () => {
 		config: { action: "resend", delay: "5s,10s", rules: [{ name: "auth", when: { error: "401" } }] },
 	});
 	const text = await h.command("show");
-	assert.match(text, /action\s+resend（设置文件）/);
+	assert.match(text, /action\s+resend（全局设置）/);
 	assert.match(text, /prompt\s+「继续」（内置默认值）/);
-	assert.match(text, /delay\s+5s,10s（设置文件）/);
+	assert.match(text, /delay\s+5s,10s（全局设置）/);
 	assert.match(text, /^1\. auth\n {3}条件 {2}错误匹配 \/401\/i\n {3}做法 {2}静默重发同一个请求$/m);
 	assert.match(await h.command("show rules"), /^规则（按顺序，第一条命中的生效/);
 });
 
 test("保存时会建目录", () => {
 	const path = join(tempDir(), "nested", "onward.json");
-	new Settings(path).update({ set: { maxRetries: 3 } });
+	new Settings(paths(path)).update("global", { set: { maxRetries: 3 } });
 	assert.deepEqual(read(path), { maxRetries: 3 });
 });

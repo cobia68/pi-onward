@@ -25,7 +25,7 @@ export interface Rule {
 	patch: PolicyPatch;
 }
 
-const RULE_KEYS = new Set(["name", "enabled", "when", ...FIELD_NAMES]);
+export const RULE_KEYS: ReadonlySet<string> = new Set(["name", "enabled", "when", ...FIELD_NAMES]);
 
 export function findRule(rules: readonly Rule[], failure: Failure): Rule | undefined {
 	return rules.find((rule) => rule.enabled && matches(rule.when, failure));

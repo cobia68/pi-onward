@@ -12,14 +12,16 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Config, Hit } from "../policy/config.ts";
 import { formatDelay, retryDelay, totalDelay } from "../policy/delay.ts";
 import { EMPTY_REPLY, errorSignature, type Failure } from "../policy/failure.ts";
-import { DEFAULT_POLICY, FIELDS, type Field, type Policy, resolvePolicy } from "../policy/policy.ts";
+import { DEFAULT_POLICY, FIELDS, type Field, type Policy, type PolicyPatch, resolvePolicy } from "../policy/policy.ts";
 import type { Rule } from "../policy/rules.ts";
 import type { GiveUp, Progress, Retry } from "../policy/tracker.ts";
 import { isRecord } from "../util.ts";
 import type { Continue } from "./onward.ts";
-import type { Saved, Settings } from "./settings.ts";
+import type { Saved, Scope, Settings, SettingsFile } from "./settings.ts";
 
 export const COMMAND = "onward";
+/** 改设置的命令改哪一份：写在动作前，`--scope project <动作>`；不写就是全局。 */
+export const SCOPE = "--scope";
 
 export interface Notice {
 	message: string;
@@ -40,6 +42,9 @@ const STOPPED = "🛑";
 
 const UNTIL_FIXED = "修好之前不会自动续跑";
 const addRules = (where = "设置文件") => `在${where}的 rules 里写规则（常见规则见 README），再 /${COMMAND} reload`;
+
+/** 两份设置文件给人看的名字：表格、来源和问题前面都用它。 */
+const SCOPE_NAMES: Readonly<Record<Scope, string>> = { global: "全局", project: "项目级" };
 
 // ── 排版 ──
 
@@ -85,10 +90,21 @@ export function commandErrorNotice(message: string, topic?: string): Notice {
 	return warning(`onward：${message}；用法见 /${COMMAND}${topic ? ` ${topic}` : ""} --help`);
 }
 
+/** `/onward` 菜单的标题：现在的状态；写了 `--scope` 时补上这个菜单看、改的是哪一份。 */
+export function menuTitle(settings: Settings, scope?: Scope): string {
+	const headline = statusHeadline(settings);
+	return scope ? `${headline} · ${SCOPE_NAMES[scope]}设置` : headline;
+}
+
+/** `/onward` 菜单里进到这一份的菜单的那一项的说明。 */
+export function layerMenuText(scope: Scope): string {
+	return `只看、只改${SCOPE_NAMES[scope]}设置`;
+}
+
 /** 一行说清现在会不会续跑：`/onward status` 的第一行，也是 `/onward` 菜单的标题。 */
 export function statusHeadline(settings: Settings): string {
-	const { config, source } = settings;
-	if (source.kind === "broken") return `${STOPPED} onward：设置文件读不了，${UNTIL_FIXED}`;
+	const { config } = settings;
+	if (brokenFiles(settings).length) return `${STOPPED} onward：设置文件读不了，${UNTIL_FIXED}`;
 	const problems = config.problems.length;
 	if (problems && !config.enabled) return `${STOPPED} onward：关；设置文件有 ${problems} 处问题，打开前要先修好`;
 	if (problems) return `${STOPPED} onward：开，但设置文件有 ${problems} 处问题，${UNTIL_FIXED}`;
@@ -108,57 +124,166 @@ export function statusNotice(settings: Settings, progress: Progress, note?: stri
  * `note` 是刚做完的事，跟在标题后面。
  */
 function statusText(settings: Settings, { used, streak }: Progress, note?: string): string {
-	const { config, source } = settings;
+	const { config } = settings;
 	const lines = [statusHeadline(settings), ...(note ? [note] : [])];
 	if (used || streak) lines.push(`上次正常返回之后已续跑 ${used} 次，同一个错误连续 ${streak} 次`);
-	const usable = source.kind !== "broken" && !config.problems.length;
+	// 读不了的文件也记成一处问题，所以这里不用另外看。
+	const usable = !config.problems.length;
 	if (usable) lines.push(...section("规则没写的参数", table(policyRows(resolvePolicy(config.defaults)))));
-	lines.push(...section("设置文件", fileLines(settings)), "");
+	lines.push(...section("设置文件", table(fileRows(settings.files))), "");
 	if (!usable) lines.push(`改好之后 /${COMMAND} reload；问题见 /${COMMAND} show`);
-	else if (!config.enabled) lines.push(`/${COMMAND} on 打开`);
+	else if (!config.enabled)
+		lines.push(`/${COMMAND} ${settings.origin("enabled") === "project" ? `${SCOPE} project ` : ""}on 打开`);
 	else if (!usableRules(config)) lines.push(addRules());
 	else lines.push(`规则见 /${COMMAND} show rules`);
 	return lines.join("\n");
 }
 
-/** 设置文件在哪、能不能读。 */
-function fileLines({ source, path }: Settings): string[] {
+/** 每份设置文件一行：哪一份、在哪、能不能读。 */
+function fileRows(files: readonly SettingsFile[]): [string, string][] {
+	return files.map((file) => [SCOPE_NAMES[file.scope], fileState(file)]);
+}
+
+function fileState({ scope, path, source }: SettingsFile): string {
 	switch (source.kind) {
 		case "file":
-			return [`  ${path}`];
+			return path;
 		case "none":
-			return [`  ${path}（还没有，改设置时自动建）`];
+			return `${path}（还没有，${scope === "global" ? "改设置时自动建" : `改设置时写 ${SCOPE} project 自动建`}）`;
 		case "broken":
-			return [`  ${path}`, `  读不了：${source.error}`];
+			return `${path}\n读不了：${source.error}`;
 	}
+}
+
+type BrokenFile = SettingsFile & { source: { kind: "broken" } };
+
+function brokenFiles(settings: Settings): BrokenFile[] {
+	return settings.files.filter((file): file is BrokenFile => file.source.kind === "broken");
 }
 
 /** `/onward show`：每个参数的值和它从哪来，再是规则，最后是设置文件。 */
 export function showNotice(settings: Settings): Notice {
-	if (settings.source.kind === "broken") return rulesNotice(settings);
+	if (brokenFiles(settings).length) return rulesNotice(settings);
 	const { defaults } = settings.config;
 	const rows = FIELDS.map((item): [string, string] => {
-		const set = Object.hasOwn(defaults, item.name);
-		const value = (set ? defaults : DEFAULT_POLICY)[item.name] as never;
-		return [item.name, `${(item as Field<typeof item.name>).show(value)}（${set ? "设置文件" : "内置默认值"}）`];
+		const from = settings.origin(item.name);
+		const value = (from ? defaults : DEFAULT_POLICY)[item.name] as never;
+		const where = from ? `${SCOPE_NAMES[from]}设置` : "内置默认值";
+		return [item.name, `${(item as Field<typeof item.name>).show(value)}（${where}）`];
 	});
 	return info(
 		[
 			"规则没写的参数",
 			...table(rows),
 			"",
-			describeRules(settings.config),
-			...section("设置文件", fileLines(settings)),
+			rulesText(settings),
+			...section("设置文件", table(fileRows(settings.files))),
 		].join("\n"),
 	);
 }
 
+/**
+ * `/onward --scope <层> show [rules]`：这一份设置文件自己写了什么，不合并、不填默认值；合并后实际用的是 `/onward show`。
+ * 规则照文件里写的列，参数只列规则自己写了的。
+ */
+export function layerNotice(settings: Settings, scope: Scope, rulesOnly: boolean): Notice {
+	const file = settings.file(scope);
+	if (!file) return warning("onward：还不知道当前目录，看不了项目级设置；会话开始之后再看");
+	const title = `${SCOPE_NAMES[scope]}设置 ${fileState(file)}`;
+	if (file.source.kind !== "file") return info(title);
+	const { layer } = file;
+	if (layer.problems.length)
+		return info(
+			[
+				title,
+				`有 ${layer.problems.length} 处问题，${UNTIL_FIXED}：`,
+				...layer.problems.map((problem) => `- ${problem}`),
+			].join("\n"),
+		);
+	const inherited = scope === "project" ? "全局设置" : "内置默认值";
+	const params: [string, string][] = [
+		...(layer.enabled === undefined ? [] : [["enabled", String(layer.enabled)] as [string, string]]),
+		...FIELDS.filter((item) => Object.hasOwn(layer.defaults, item.name)).map((item): [string, string] => [
+			item.name,
+			shown(item, layer.defaults),
+		]),
+	];
+	const rules =
+		layer.rules === undefined
+			? [`没写 rules，${scope === "project" ? "用全局设置的" : "没有规则"}`]
+			: layerRules(layer.rules, scope);
+	const head = rulesOnly ? [] : [...(params.length ? table(params) : [`  没写开关和参数，都用${inherited}的`]), ""];
+	return info([title, ...head, ...rules, "", `合并后实际用的见 /${COMMAND} show`].join("\n"));
+}
+
+/** 一份设置文件里的 rules，照写的列：条件，和规则自己写了的参数。 */
+function layerRules(rules: readonly Rule[], scope: Scope): string[] {
+	if (!rules.length) return [`rules 是空的：${scope === "project" ? "这个项目里没有规则" : "没有规则"}`];
+	return [
+		`rules（${rules.length} 条，按顺序，第一条命中的生效）`,
+		...rules.map((rule, index) => {
+			const own = FIELDS.filter((item) => Object.hasOwn(rule.patch, item.name)).map(
+				(item) => `${item.name}=${shown(item, rule.patch)}`,
+			);
+			const state = rule.enabled ? "" : "（已停用）";
+			return `  ${index + 1}. ${rule.name}${state}：${describeWhen(rule)}${own.length ? `；${own.join(" ")}` : ""}`;
+		}),
+	];
+}
+
+function shown(item: Field, values: PolicyPatch): string {
+	return (item as Field<typeof item.name>).show(values[item.name] as never);
+}
+
 /** `/onward show rules`。设置文件读不了时说读不了：规则一条也没读到，不是没写。 */
 export function rulesNotice(settings: Settings): Notice {
-	if (settings.source.kind !== "broken") return info(describeRules(settings.config));
+	const broken = brokenFiles(settings);
+	if (!broken.length) return info(rulesText(settings));
 	return info(
-		[`设置文件读不了，${UNTIL_FIXED}`, ...fileLines(settings), "", `改好之后 /${COMMAND} reload`].join("\n"),
+		[`设置文件读不了，${UNTIL_FIXED}`, ...table(fileRows(broken)), "", `改好之后 /${COMMAND} reload`].join("\n"),
 	);
+}
+
+/** 规则的全文。有项目级设置在用时，问题前面标上是哪一份的，规则前面说来自哪一份。 */
+function rulesText(settings: Settings): string {
+	const labelled = settings.projectFile !== undefined;
+	const problems = settings.files.flatMap((file) =>
+		file.layer.problems.map((problem) => (labelled ? `${SCOPE_NAMES[file.scope]}：${problem}` : problem)),
+	);
+	return describeRules({ ...settings.config, problems }, rulesFrom(settings));
+}
+
+/** 有项目级设置在用时，说规则来自哪一份；项目级的 rules 替换了全局的，也说一句。只有一份时不说。 */
+function rulesFrom(settings: Settings): string | undefined {
+	const origin = settings.origin("rules");
+	if (settings.projectFile === undefined || origin === undefined) return undefined;
+	const replaced = origin === "project" && settings.has("global", "rules");
+	return `规则来自${SCOPE_NAMES[origin]}设置${replaced ? "，全局的 rules 不生效" : ""}`;
+}
+
+/** 改了开关或参数之后：有项目级设置在用、或者改的就是项目级时，说改的是哪一份；只有一份时说了也多余。 */
+export function scopeLine(settings: Settings, scope: Scope): string | undefined {
+	return scope === "project" || settings.projectFile !== undefined ? `改的是${SCOPE_NAMES[scope]}设置` : undefined;
+}
+
+/**
+ * 改了全局、项目级又写了同名的：这个项目里还是按项目级的走，给出跟随全局的写法，和 wecom-aibot 一样。`keys` 是这次
+ * 改到的开关和参数。
+ */
+export function shadowLine(settings: Settings, scope: Scope, keys: readonly string[]): string | undefined {
+	const shadowed = scope === "global" ? keys.filter((key) => settings.has("project", key)) : [];
+	return shadowed.length
+		? `项目级设置也写了 ${shadowed.join("、")}，这个项目里仍按项目级的走；要跟随全局时运行 /${COMMAND} ${SCOPE} project unset ${shadowed.join(" ")}`
+		: undefined;
+}
+
+/** reset 之后说做了什么。有项目级设置在用时，「恢复默认」不对：去掉的那份之外，另一份还在。 */
+export function resetLine(settings: Settings, scope: Scope, keptRules: boolean): string {
+	const done =
+		scope === "project" || settings.projectFile !== undefined
+			? `已去掉${SCOPE_NAMES[scope]}的开关和参数`
+			: "已恢复默认";
+	return keptRules ? `${done}，手写的 rules 保留` : done;
 }
 
 /** 一次修改之后：写好了就是当前状态，`done` 跟在标题后面；否则说明为什么。 */
@@ -167,7 +292,9 @@ export function changedNotice(saved: Saved, settings: Settings, progress: Progre
 		case "saved":
 			return statusNotice(settings, progress, done);
 		case "broken":
-			return warning(`${STOPPED} onward：${settings.path} 读不了（${saved.error}），先修好；未做任何修改`);
+			return warning(`${STOPPED} onward：${saved.path} 读不了（${saved.error}），先修好；未做任何修改`);
+		case "unbound":
+			return warning("onward：还不知道当前目录，改不了项目级设置；会话开始之后再改。未做任何修改");
 		case "unwritten":
 			return warning(
 				`onward：设置没能保存（${saved.error}），这次运行仍按改过的设置走\n${statusText(settings, progress)}`,
@@ -216,11 +343,15 @@ function sequence(values: (number | undefined)[]): string {
 	return `${texts.map((text) => text.replace(` ${only}`, "")).join(" → ")} ${only}`;
 }
 
-/** `/onward show rules` 的全文。有问题时只列问题：规则反正不生效，列出来反而像在跑。 */
-export function describeRules(config: Config): string {
+/**
+ * `/onward show rules` 的全文。有问题时只列问题：规则反正不生效，列出来反而像在跑。`from` 说规则来自哪份设置文件，
+ * 写在最前面。
+ */
+export function describeRules(config: Config, from?: string): string {
 	if (config.problems.length)
 		return `设置文件有 ${config.problems.length} 处问题，${UNTIL_FIXED}：\n${config.problems.map((p) => `- ${p}`).join("\n")}\n改完 /${COMMAND} reload`;
-	if (!config.rules.length) return `没有可用的规则，出错时不会自动续跑。${addRules()}`;
+	const source = from ? [from] : [];
+	if (!config.rules.length) return [...source, `没有可用的规则，出错时不会自动续跑。${addRules()}`].join("\n");
 	const blocks = config.rules.map((rule, index) => {
 		const rows: [string, string][] = [
 			["条件", describeWhen(rule)],
@@ -231,7 +362,7 @@ export function describeRules(config: Config): string {
 			...table(rows).map((line) => ` ${line}`),
 		];
 	});
-	return ["规则（按顺序，第一条命中的生效；没命中的错误和空回复不处理）", ...blocks.flat()].join("\n");
+	return [...source, "规则（按顺序，第一条命中的生效；没命中的错误和空回复不处理）", ...blocks.flat()].join("\n");
 }
 
 function describeWhen({ when }: Rule): string {
@@ -244,9 +375,9 @@ function describeWhen({ when }: Rule): string {
 	return parts.length ? parts.join("，") : "任何错误";
 }
 
-/** 文件读不了，或者内容有读不懂的地方。 */
+/** 文件读不了，或者内容有读不懂的地方：读不了也记成一处问题。 */
 function needsFix(settings: Settings): boolean {
-	return settings.source.kind === "broken" || settings.config.problems.length > 0;
+	return settings.config.problems.length > 0;
 }
 
 function usableRules(config: Config): number {
@@ -255,19 +386,40 @@ function usableRules(config: Config): number {
 
 // ── 运行中的通知 ──
 
-/** 启动时值得说的事：设置文件读不了或有问题（关着也说，可能就是 enabled 写错了）、没有可用的规则。 */
+/**
+ * 启动时值得说的事：用上了项目级设置（仓库里带的设置能让 onward 替你给模型发消息，要让人知道）；设置文件读不了
+ * 或有问题，说是哪一份（关着也说，可能就是 enabled 写错了）；没有可用的规则。
+ */
 export function startupNotices(settings: Settings): Notice[] {
-	const { config, source, path } = settings;
-	if (source.kind === "broken") return [warning(`${STOPPED} onward：${path} 读不了：${source.error}，${UNTIL_FIXED}`)];
-	if (config.problems.length)
+	const { config } = settings;
+	const project = settings.file("project");
+	// 读不了的项目级文件不说「用上了」：下面的警告已经写了它的路径。
+	const notices: Notice[] =
+		project?.source.kind === "file" ? [info(`onward：用上了项目级设置 ${project.path}，它写了的字段覆盖全局的`)] : [];
+	const broken = brokenFiles(settings);
+	if (broken.length)
 		return [
-			warning(
-				`${STOPPED} onward：设置文件有 ${config.problems.length} 处问题，${UNTIL_FIXED}（/${COMMAND} show 查看）`,
+			...notices,
+			...broken.map((file) =>
+				warning(`${STOPPED} onward：${file.path} 读不了：${file.source.error}，${UNTIL_FIXED}`),
 			),
 		];
-	if (config.enabled && !usableRules(config))
-		return [info(`${IDLE} onward：没有可用的规则，出错时不会自动续跑；${addRules(` ${path} `)}`)];
-	return [];
+	if (config.problems.length)
+		return [
+			...notices,
+			...settings.files
+				.filter((file) => file.layer.problems.length)
+				.map((file) =>
+					warning(
+						`${STOPPED} onward：${file.path} 有 ${file.layer.problems.length} 处问题，${UNTIL_FIXED}（/${COMMAND} show 查看）`,
+					),
+				),
+		];
+	if (config.enabled && !usableRules(config)) {
+		const where = (settings.origin("rules") === "project" && project) || settings.file("global");
+		notices.push(info(`${IDLE} onward：没有可用的规则，出错时不会自动续跑；${addRules(` ${where.path} `)}`));
+	}
+	return notices;
 }
 
 /**
@@ -303,13 +455,13 @@ export function giveUpStatus(hit: Hit, step: GiveUp): string {
 	return `${STOPPED} ${step.reason === "stop" ? "不续跑" : "续跑已停"} · ${hit.rule.name}`;
 }
 
-/** 续跑消息在会话里的标签；`details` 来自会话记录，旧的或别处写的可能不全。 */
+/** 续跑消息在会话里的标签。`details` 来自会话记录文件，按 unknown 读：字段齐全才写第几次和规则名。 */
 export function continueLabel(details: unknown): string {
-	if (!isRecord(details) || typeof details.rule !== "string") return `${RUNNING} onward`;
+	if (!isRecord(details)) return `${RUNNING} onward`;
 	const { rule, attempt, max } = details;
-	return Number.isInteger(attempt) && Number.isInteger(max)
+	return typeof rule === "string" && Number.isInteger(attempt) && Number.isInteger(max)
 		? `${RUNNING} onward · ${progressText(rule, attempt as number, max as number)}`
-		: `${RUNNING} onward · ${rule}`;
+		: `${RUNNING} onward`;
 }
 
 function progressText(rule: string, attempt: number, max: number): string {

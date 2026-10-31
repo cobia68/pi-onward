@@ -58,12 +58,13 @@ test("命令名后面按 Tab：列出动作，不列文件", async () => {
 	const top = await tab("/onward ");
 	assert.equal(top.text, "/onward ");
 	assert.equal(top.listed, true, "紧跟在命令名后面也列出来");
-	assert.match(top.menu, /→ status {2}现在/, "说明紧跟在名字后面，不拉到固定宽度");
+	assert.match(top.menu, /→ --scope {2}看或改哪一份设置/, "说明紧跟在名字后面，不拉到固定宽度；--scope 排在动作前");
+	assert.match(top.menu, /^ {2}status {3}现在/m);
 	const some = await tab("/onward s");
 	assert.equal(some.text, "/onward s", "不补成 /onward status-notes/");
 	assert.equal(some.listed, true);
 	assert.match(some.menu, /→ status/);
-	assert.match(some.menu, /^ {2}show {4}各项/m, "说明对齐在同一列");
+	assert.match(some.menu, /^ {2}show {5}各项/m, "说明对齐在同一列");
 	assert.doesNotMatch(some.menu, /status-notes/);
 });
 
@@ -112,7 +113,7 @@ test("没写 --help 之前：每个动作后面都给它，只剩它时 Tab 直�
 	assert.equal((await tab("/onward reload ")).text, "/onward reload --help");
 	assert.equal((await tab("/onward st", 2)).text, "/onward status --help", "补完动作再按一下");
 	assert.equal((await tab("/onward show rules ")).text, "/onward show rules --help");
-	assert.equal((await tab("/onward set -")).text, "/onward set --help", "--help 是结束，不带空格");
+	assert.equal((await tab("/onward set --h")).text, "/onward set --help", "--help 是结束，不带空格");
 	const show = await tab("/onward show ");
 	assert.equal(show.listed, true);
 	assert.match(show.menu, /→ rules/);

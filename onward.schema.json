@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cobia68/pi-onward/main/onward.schema.json",
+  "title": "pi-onward 设置",
+  "description": "~/.pi/agent/onward.json（全局）或 .pi/onward.json（项目级）。顶层的参数是每条规则的默认值，规则里同名的字段覆盖它",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "description": "这份 JSON Schema 的地址，给编辑器用",
+      "type": "string"
+    },
+    "enabled": {
+      "description": "插件开关",
+      "type": "boolean",
+      "default": true
+    },
+    "action": {
+      "description": "怎么续跑。message：发一条看得见的消息再接着跑；resend：静默重发同一个请求；stop：不续跑，只提醒",
+      "enum": [
+        "message",
+        "resend",
+        "stop"
+      ],
+      "default": "message"
+    },
+    "prompt": {
+      "description": "message 发的消息，可含 {attempt} {max} {error} {rule}",
+      "type": "string",
+      "pattern": "\\S",
+      "maxLength": 500,
+      "default": "继续"
+    },
+    "maxRetries": {
+      "description": "连续失败时最多续跑几次（1–50）",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50,
+      "default": 10
+    },
+    "maxSameError": {
+      "description": "同一个错误最多续跑几次，再出现就彻底停（1–50）",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50,
+      "default": 10
+    },
+    "delay": {
+      "description": "列表按顺序等，最后一个值重复；起步..封顶按次数增长（5s,10s,30s 或 3s..15s）",
+      "type": "string",
+      "pattern": "^\\s*(\\d+(\\.\\d+)?(ms|s|m)\\.\\.\\d+(\\.\\d+)?(ms|s|m)|\\d+(\\.\\d+)?(ms|s|m)(\\s*,\\s*\\d+(\\.\\d+)?(ms|s|m))*)\\s*$",
+      "default": "3s..15s"
+    },
+    "rules": {
+      "description": "按顺序第一条命中的生效；没命中的错误和空回复不处理",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "规则名，出现在通知里，不能重名；不写时按位置叫 rule-1、rule-2",
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "enabled": {
+          "description": "false 时保留但跳过",
+          "type": "boolean",
+          "default": true
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        },
+        "action": {
+          "description": "怎么续跑。message：发一条看得见的消息再接着跑；resend：静默重发同一个请求；stop：不续跑，只提醒。覆盖顶层的同名字段",
+          "enum": [
+            "message",
+            "resend",
+            "stop"
+          ]
+        },
+        "prompt": {
+          "description": "message 发的消息，可含 {attempt} {max} {error} {rule}。覆盖顶层的同名字段",
+          "type": "string",
+          "pattern": "\\S",
+          "maxLength": 500
+        },
+        "maxRetries": {
+          "description": "连续失败时最多续跑几次（1–50）。覆盖顶层的同名字段",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "maxSameError": {
+          "description": "同一个错误最多续跑几次，再出现就彻底停（1–50）。覆盖顶层的同名字段",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "delay": {
+          "description": "列表按顺序等，最后一个值重复；起步..封顶按次数增长（5s,10s,30s 或 3s..15s）。覆盖顶层的同名字段",
+          "type": "string",
+          "pattern": "^\\s*(\\d+(\\.\\d+)?(ms|s|m)\\.\\.\\d+(\\.\\d+)?(ms|s|m)|\\d+(\\.\\d+)?(ms|s|m)(\\s*,\\s*\\d+(\\.\\d+)?(ms|s|m))*)\\s*$"
+        }
+      }
+    },
+    "when": {
+      "description": "命中条件，几项都要满足；不写 when 的规则管所有错误，不管空回复",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "empty": {
+          "description": "只管空回复，不管出错；不能和 error 一起写",
+          "const": true
+        },
+        "error": {
+          "description": "正则，大小写不敏感，对原始错误文案匹配",
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "description": "通配，只有 * 有特殊含义，大小写不敏感，整串匹配",
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "model": {
+          "description": "通配，只有 * 有特殊含义，大小写不敏感，整串匹配",
+          "type": "string",
+          "pattern": "\\S"
+        }
+      },
+      "dependentSchemas": {
+        "empty": {
+          "properties": {
+            "error": false
+          }
+        }
+      }
+    }
+  }
+}

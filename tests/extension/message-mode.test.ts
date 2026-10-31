@@ -154,7 +154,7 @@ test("没有内置规则：没写 rules 或全部写坏都不续跑，启动时�
 		config: { delay: "0s", rules: [{ name: "auth", when: { errr: "401" } }] },
 	});
 	await typo.emit("session_start", { reason: "startup" });
-	assert.match(typo.warnings()[0], /设置文件有 1 处问题，修好之前不会自动续跑/);
+	assert.match(typo.warnings()[0], /onward\.json 有 1 处问题，修好之前不会自动续跑/);
 	assert.equal(await typo.boundary(err("429 rate limited")), undefined);
 
 	// 全部停用也算没有可用的规则；关掉了就不提醒。
@@ -188,7 +188,7 @@ test("stop 规则里的键拼错了：整份设置不生效，额度错误不会
 		},
 	});
 	await h.emit("session_start", { reason: "startup" });
-	assert.match(h.warnings()[0], /设置文件有 1 处问题，修好之前不会自动续跑/);
+	assert.match(h.warnings()[0], /onward\.json 有 1 处问题，修好之前不会自动续跑/);
 	assert.equal(await h.boundary(err("429 insufficient_quota")), undefined);
 	assert.equal(await h.boundary(err("502 upstream")), undefined);
 	assert.deepEqual(h.sent, []);

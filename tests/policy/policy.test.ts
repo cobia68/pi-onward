@@ -36,7 +36,7 @@ test("参数：合法的收下，不合法的记问题，不夹到范围内、�
 	assert.deepEqual(problems, [
 		"action 只能是 message、resend 或 stop",
 		"maxRetries 需要 1–50 的整数",
-		"maxSameError 需要 1–100 的整数",
+		"maxSameError 需要 1–50 的整数",
 	]);
 	const rule: string[] = [];
 	assert.deepEqual(readParams({ prompt: " ", delay: 3000 }, "rules[0]（a）.", rule), {});

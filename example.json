@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/cobia68/pi-onward/main/onward.schema.json",
   "enabled": true,
   "action": "message",
   "prompt": "继续",

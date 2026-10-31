@@ -1,8 +1,9 @@
 /** 假的 pi：只实现扩展用到的 on / registerCommand / ctx.ui，按真实顺序发事件。 */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { install } from "../../src/extension/install.ts";
+import type { ConfigPaths } from "../../src/extension/settings.ts";
 import type { AgentMessage, EmptyReply, Failure } from "../../src/policy/failure.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
@@ -12,12 +13,18 @@ export function tempDir(): string {
 	return mkdtempSync(join(tmpdir(), "pi-onward-"));
 }
 
-/** 写一份设置文件，返回路径。 */
-export function writeConfig(value: unknown, dir = tempDir()): string {
-	const path = join(dir, "onward.json");
+/** 写一份设置文件，返回路径；目录不在就建。 */
+export function writeConfig(value: unknown, path = join(tempDir(), "onward.json")): string {
+	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, typeof value === "string" ? value : JSON.stringify(value));
 	return path;
 }
+
+/** 和 index.ts 一样：项目级是当前目录下的 .pi/onward.json。 */
+export const projectConfigPath = (cwd: string) => join(cwd, ".pi", "onward.json");
+
+/** 只给全局的路径时，项目级按 index.ts 的规矩放。 */
+export const paths = (file: string): ConfigPaths => ({ global: file, project: projectConfigPath });
 
 /** 一条字段齐全的助手消息，和 pi 发来的一样。 */
 export const assistant = (extra: Partial<Assistant> = {}): Assistant => ({
@@ -73,7 +80,11 @@ export interface Harness {
 	notes: [string, string][];
 	warnings(): string[];
 	controller: AbortController;
+	/** 全局设置文件。 */
 	configPath: string;
+	/** 当前目录和它的项目级设置文件；项目级等 session_start 才读。 */
+	cwd: string;
+	projectPath: string;
 	/** 用户排进来、还没处理的消息数。 */
 	pending: number;
 	/** 一次助手回复走到收尾边界；要求继续时模拟 pi 重新发 agent_start，否则落定。 */
@@ -94,10 +105,18 @@ export interface Harness {
 
 let sessions = 0;
 
+/** `config` 是全局设置的内容，`project` 是当前目录下 .pi/onward.json 的内容；字符串原样写进去。 */
 export function harness(
-	options: { configPath?: string; config?: unknown; copies?: number; ui?: boolean } = {},
+	options: {
+		configPath?: string;
+		config?: unknown;
+		project?: unknown;
+		cwd?: string;
+		copies?: number;
+		ui?: boolean;
+	} = {},
 ): Harness {
-	const { config, copies = 1, ui = true } = options;
+	const { config, project, copies = 1, ui = true } = options;
 	const statuses = new Map<string, string>();
 	let statusWrites = 0;
 	const handlers = new Map<string, Handler[]>();
@@ -112,8 +131,12 @@ export function harness(
 	const controller = new AbortController();
 	const sessionId = `session-${++sessions}`;
 	let pending = 0;
+	const cwd = options.cwd ?? tempDir();
+	const projectPath = projectConfigPath(cwd);
+	if (project !== undefined) writeConfig(project, projectPath);
 	const ctx = {
 		hasUI: ui,
+		cwd,
 		get signal() {
 			return controller.signal;
 		},
@@ -150,7 +173,7 @@ export function harness(
 	};
 	const configPath =
 		options.configPath ?? (config === undefined ? join(tempDir(), "onward.json") : writeConfig(config));
-	for (let i = 0; i < copies; i++) install(pi as any, configPath);
+	for (let i = 0; i < copies; i++) install(pi as any, paths(configPath));
 
 	// 和 pi 一样：边界上后一个处理器看到前面提出的条目和继续要求。
 	const emit = async (event: string, payload: any = {}) => {
@@ -177,6 +200,8 @@ export function harness(
 		warnings: () => notes.filter(([level]) => level === "warning").map(([, m]) => m),
 		controller,
 		configPath,
+		cwd,
+		projectPath,
 		get pending() {
 			return pending;
 		},

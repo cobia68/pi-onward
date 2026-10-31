@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderContinue } from "../../src/extension/render.ts";
 import { columns, continueLabel, describeDelay, describeRules } from "../../src/extension/text.ts";
-import { parseConfig } from "../../src/policy/config.ts";
 import { parseDelay } from "../../src/policy/delay.ts";
 import { type Policy, resolvePolicy } from "../../src/policy/policy.ts";
+import { parseConfig } from "../support/config.ts";
 
 const delay = (text: string, maxRetries: number) =>
 	describeDelay(resolvePolicy({ delay: parseDelay(text) as Policy["delay"], maxRetries }));
@@ -82,9 +82,9 @@ test("菜单和补全的一项正好一行：说明里的换行换成空格，�
 
 test("续跑消息：标签写第几次和哪条规则，记录不全时退回只写名字", () => {
 	assert.equal(continueLabel({ rule: "auth", attempt: 2, max: 20 }), "⏩ onward · 续跑 2/20 · auth");
-	assert.equal(continueLabel({ rule: "auth" }), "⏩ onward · auth");
+	assert.equal(continueLabel({ rule: "auth" }), "⏩ onward", "字段不全：不猜");
 	assert.equal(continueLabel(undefined), "⏩ onward");
-	assert.equal(continueLabel({ rule: 3 }), "⏩ onward");
+	assert.equal(continueLabel({ rule: 3, attempt: 1, max: 2 }), "⏩ onward");
 });
 
 test("续跑消息：渲染成标签加原文，原文不变", () => {

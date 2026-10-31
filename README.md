@@ -23,8 +23,6 @@
 pi install npm:@cobia/pi-onward
 ```
 
-以前从 Git 仓库或本地目录装过的，先用 `pi list` 找到原来的来源，`pi remove <来源>` 删掉再装；在 `defaultSubagentOnlyExtensions` 里写过入口路径的，按[常见问题](#-常见问题)里 subagent 那一条改成新的位置。
-
 重开 pi 或输入 `/reload`，再输入 `/onward status`：看到「💤 onward：开，但没有可用的规则…」就是装好了。这时出错还不会续跑：把包里的 [`example.json`](example.json)（装在 `~/.pi/agent/npm/node_modules/@cobia/pi-onward/example.json`）复制成 `~/.pi/agent/onward.json`（已有的话先备份），再 `/onward reload`。它的规则就是下面的[常见规则](#-常见规则)。
 
 ## ⚙️ 工作方式
@@ -58,17 +56,20 @@ pi install npm:@cobia/pi-onward
 
 ## 📝 设置文件
 
-`~/.pi/agent/onward.json`：在 pi 的配置目录里，设了 `PI_CODING_AGENT_DIR` 就跟着它；环境变量 `PI_ONWARD_CONFIG` 可以直接指定路径。没有这个文件、或者里面没有规则，出错时什么都不做，启动时提醒一句。`/onward` 命令只改 `enabled` 和顶层的参数，`rules` 要手写，改完 `/onward reload`。
+`~/.pi/agent/onward.json`：在 pi 的配置目录里，设了 `PI_CODING_AGENT_DIR` 就跟着它。没有这个文件、或者里面没有规则，出错时什么都不做，启动时提醒一句。`/onward` 命令只改 `enabled` 和顶层的参数，`rules` 要手写，改完 `/onward reload`。某个项目要用不同的规则或参数时，在项目里另写一份，见[项目级设置](#项目级设置)。
+
+文件开头写上 `"$schema": "https://raw.githubusercontent.com/cobia68/pi-onward/main/onward.schema.json"`，VS Code 这类编辑器就能补全字段、检查取值；全局和项目级都能写，[`example.json`](example.json) 里已经写了。写法对、意思不对的（例如正则写错、重名的规则、封顶小于起步），编辑器查不出来，以 `/onward show` 为准。
 
 顶层写的参数就是每条规则的默认值，规则里只写和顶层不同的字段。下面是全部字段的说明，`//` 注释只为说明，真实文件是纯 JSON，不能写注释；可以直接复制的见[常见规则](#-常见规则)。
 
 ```jsonc
 {
+  "$schema": "https://raw.githubusercontent.com/cobia68/pi-onward/main/onward.schema.json", // 可选，给编辑器用
   "enabled": true,               // 插件开关；不是默认值
   "action": "message",           // message | resend | stop
   "prompt": "继续",              // message 发的消息
   "maxRetries": 10,              // 1–50
-  "maxSameError": 10,            // 1–100
+  "maxSameError": 10,            // 1–50
   "delay": "3s..15s",            // 或 "5s,10s,30s"
   "rules": [
     {
@@ -98,7 +99,7 @@ pi install npm:@cobia/pi-onward
 - 不带 `when` 的兜底只管出错，不管空回复；空回复要单独写一条 `"when": { "empty": true }` 的规则。
 - `"action": "stop"` 的规则命中就停、只提醒，也挡住后面的兜底。适合额度用完这类重试没用的错误。
 - `enabled: false` 的规则保留但跳过。
-- 每条规则有自己的续跑次数；「同一个错误连续几次」是全局的，但用的是当前命中规则的上限。
+- 每条规则有自己的续跑次数；「同一个错误连续几次」不分规则，但用的是当前命中规则的上限。
 
 | 字段                                                      | 说明                                                              |
 | :-------------------------------------------------------- | :---------------------------------------------------------------- |
@@ -111,7 +112,18 @@ pi install npm:@cobia/pi-onward
 
 `prompt` 里可以写 `{attempt}`（第几次）、`{max}`（最多几次）、`{error}`（错误摘要，空回复时是「空回复」）、`{rule}`（规则名）。
 
-**设置文件里有读不懂的地方，整份不生效**，修好之前不会自动续跑，启动时和 `/onward status` 都会提醒。拼错或不认识的键、超出范围的值、不是 `true` / `false` 的 `enabled`、重名的规则都算。不会只丢掉写坏的那部分、其余照跑：那样错误会落到更宽的规则或默认值上，比如写坏了的 `stop` 规则让额度错误落到兜底去续跑，多发真实请求。问题用 `/onward show` 查看，改完 `/onward reload`。设置文件不是合法 JSON、或者顶层不是对象时也一样；这时命令不会改写它，回复「未做任何修改」。
+**设置文件里有读不懂的地方，整份不生效**，修好之前不会自动续跑，启动时和 `/onward status` 都会提醒。拼错或不认识的键、超出范围的值、不是 `true` / `false` 的 `enabled`、重名的规则都算。不会只丢掉写坏的那部分、其余照跑：那样错误会落到更宽的规则或默认值上，比如写坏了的 `stop` 规则让额度错误落到兜底去续跑，多发真实请求。问题用 `/onward show` 查看，改完 `/onward reload`。设置文件不是合法 JSON、或者顶层不是对象时也一样；这时命令不会改写它，回复「未做任何修改」。有项目级设置时，两份里任何一份这样，都是整份不生效。
+
+### 项目级设置
+
+在启动 pi 的目录下写 `.pi/onward.json`，写法和上面一样，只写和全局不同的字段。例如这个项目里不续跑，只要写 `{ "enabled": false }`，或者输入 `/onward --scope project off`。
+
+- **只看当前目录**：只读启动 pi 的那个目录下的 `.pi/onward.json`，不往上级目录找，和 pi 读 `.pi/settings.json` 一样。在仓库的子目录里启动 pi，仓库根目录的那份不生效。
+- **和全局合并**：优先级是内置默认值 < 全局 < 项目级。开关和顶层的参数逐个字段合并，项目级写了的覆盖全局的，都没写的用内置默认值。`rules` 整份替换、不拼接：项目级写了 `rules` 就只用它的，写成 `[]` 就是这个项目里没有规则；没写才用全局的。规则按顺序第一条命中、不能重名，拼在一起顺序和重名都说不清。
+- **命令看或改哪一份由 `--scope` 定**：写在动作前，`/onward --scope project set maxRetries=3`，也可以写成 `--scope=project`。`on`、`off`、`set`、`unset`、`reset` 不写或写 `global` 改全局，和 pi 的 `install`、`config` 不加 `--local` 时一样，写 `project` 改这一份，文件不在就建，去掉本来就没有的参数时不建。`show` 不写时看合并后的结果，写了只看那一份文件写了什么，不合并、不填默认值。其他动作不认它；写在动作后不执行，回复给出正确的写法。只写 `/onward --scope project` 时弹出只看、只改这一份的菜单，`/onward` 的菜单里也有进到每一份的项。改了全局、项目级又写了同名字段时，回复会说这个项目里仍按项目级的走，并给出跟随全局的写法 `/onward --scope project unset <字段>`。
+- **看得见在用哪一份**：用上了项目级设置时启动提醒一句，哪一份有问题也说是哪一份；`/onward status` 列出两份文件，`/onward show` 写明每个参数和规则来自哪一份。
+
+**别人的仓库可能自带 `.pi/onward.json`**，和 `AGENTS.md` 一样先看一遍再用：它的 `prompt` 会当成你的消息发给模型，次数和间隔决定多发多少真实请求。在这样的目录里启动 pi 它就生效，和 pi 信不信任这个项目无关。
 
 ## 📋 常见规则
 
@@ -201,26 +213,28 @@ pi install npm:@cobia/pi-onward
 
 ## 🧰 命令速查
 
-动作在前，参数写成 `字段=值`，字段名和设置文件一样。
+参数写在动作后，写成 `字段=值`，字段名和设置文件一样；改哪一份设置的 `--scope` 写在动作前。动作、字段、取值和选项都区分大小写，和设置文件、pi 自己的命令名一样：`/onward RESET`、`set maxretries=3`、`delay=5S` 都会被拒绝。
 
-| 命令                    | 作用                                                                                                      |
-| :---------------------- | :-------------------------------------------------------------------------------------------------------- |
-| `/onward`               | 弹出菜单，标题是现在的状态；选了就执行，`set`、`unset` 填进输入框接着写参数                               |
-| `/onward status`        | 现在会不会续跑、规则没写的参数（做法、上限、间隔）、设置文件；正在续跑时还有进度                          |
-| `/onward on` · `off`    | 开关                                                                                                      |
-| `/onward show`          | 各项参数的值和来源（设置文件或内置默认值）、规则、设置文件里的问题                                        |
-| `/onward show rules`    | 只看规则                                                                                                  |
-| `/onward set 字段=值 …` | 改顶层的参数，规则没写的字段用它；例如 `set action=resend maxRetries=20 delay=5s,10s,30s`                 |
-| `/onward unset 字段 …`  | 去掉参数，退回内置默认值，例如 `unset delay`                                                              |
-| `/onward reload`        | 重新读设置文件                                                                                            |
-| `/onward reset`         | 去掉 `enabled` 和顶层的参数，保留手写的 `rules`                                                           |
-| `/onward --help`        | 有哪些动作                                                                                                |
-| `/onward <动作> --help` | 这个动作的用法和说明；`set --help`、`unset --help` 还列出字段和默认值。写了 `--help` 就只显示帮助，不执行 |
+| 命令                             | 作用                                                                                                                                                                             |
+| :------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/onward`                        | 弹出菜单，标题是现在的状态；选了就执行，`set`、`unset` 填进输入框接着写参数，`--scope <层> …` 进到只看、只改那一份的菜单                                                         |
+| `/onward status`                 | 现在会不会续跑、规则没写的参数（做法、上限、间隔）、全局和项目级设置文件；正在续跑时还有进度                                                                                     |
+| `/onward on` · `off`             | 开关                                                                                                                                                                             |
+| `/onward show`                   | 各项参数的值和来源（全局设置、项目级设置或内置默认值）、规则、设置文件里的问题                                                                                                   |
+| `/onward show rules`             | 只看规则                                                                                                                                                                         |
+| `/onward set 字段=值 …`          | 改顶层的参数，规则没写的字段用它；例如 `set action=resend maxRetries=20 delay=5s,10s,30s`                                                                                        |
+| `/onward unset 字段 …`           | 去掉开关 `enabled` 或参数，继承下一层：项目级的退回全局，全局的退回内置默认值，例如 `unset delay`、`--scope project unset enabled`                                               |
+| `/onward reload`                 | 重新读两份设置文件                                                                                                                                                               |
+| `/onward reset`                  | 去掉 `enabled` 和顶层的参数，保留手写的 `rules`                                                                                                                                  |
+| `/onward --scope project <动作>` | `on`、`off`、`set`、`unset`、`reset` 改项目级设置，不写 `--scope` 或写 `--scope global` 改全局；`show` 只看项目级文件写了什么；只写 `--scope project` 弹出只看、只改项目级的菜单 |
+| `/onward --help`                 | 有哪些动作                                                                                                                                                                       |
+| `/onward <动作> --help`          | 这个动作的用法和说明；`set --help`、`unset --help` 还列出字段和默认值。写了 `--help` 就只显示帮助，不执行                                                                        |
 
 - `set` 全有或全无：任何一项不合法就一项都不改，问题一起说。
+- `--scope` 只能写在动作前：`/onward set maxRetries=3 --scope project` 不执行，回复给出正确的写法。见[项目级设置](#项目级设置)。
 - 值里有空格时加双引号：`/onward set prompt="接着做，第 {attempt} 次"`。
 - 命令不会新增规则，`set rules=…` 会被拒绝。
-- 输入时按 Tab 补全动作、字段名、`action` 的取值和 `--help`，选中一项再按 Tab 补下一层。每个动作后面都给 `--help`；写了 `--help` 就是结束，什么都不再补。写过的字段不再给，引号里的值不补。
+- 输入时按 Tab 补全 `--scope` 和它的取值、动作、字段名、`action` 的取值和 `--help`，选中一项再按 Tab 补下一层。`--scope` 只在动作前给，写了它之后只给改设置的动作。每个动作后面都给 `--help`；写了 `--help` 就是结束，什么都不再补。写过的字段不再给，引号里的值不补。
 
 ## ❓ 常见问题
 
@@ -258,10 +272,11 @@ pi 自带的重试（`settings.json` 的 `retry`）先跑，它只处理瞬时�
 ```bash
 npm install --no-bin-links   # 仓库在不支持符号链接的共享目录上时加 --no-bin-links
 npm run check                # biome + tsc + 测试 + 用 pi 的加载器加载一遍
+npm run gen:schema           # 改了字段、取值或默认值之后，重新生成 onward.schema.json
 ```
 
-| 目录             | 内容                                                                                                                                                                                                                                                                |
-| :--------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/policy/`    | 纯逻辑，不碰 pi 的运行时和文件（只用 pi 的类型）：什么算失败（`failure`）、命中哪条规则（`rules`）、按什么参数（`policy`，一张字段表管校验、帮助和补全）、等多久（`delay`）、什么时候停（`tracker`）；`config` 把它们拼成设置文件的模型                             |
-| `src/extension/` | 接 pi：`onward` 处理事件并续跑，`command` 是 `/onward`，`autocomplete` 让它的参数里按 Tab 补参数、不补文件名，`settings` 读写设置文件，`text` 是给人看的文字，`render` 画会话里的续跑消息，`install` 把它们装起来；`index` 是 pi 加载的入口，只决定设置文件放在哪里 |
-| `tests/`         | `node:test`，目录与 `src/` 对应；`tests/support/fake-pi.ts` 按 pi 的真实事件顺序发事件，直接装 `install`，不加载 pi 本体；补全在 pi-tui 真实的编辑器里按键。入口和设置文件的位置由 `scripts/check-extension.mjs` 用 pi 自己的加载器检查                             |
+| 目录             | 内容                                                                                                                                                                                                                                                                                                                          |
+| :--------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/policy/`    | 纯逻辑，不碰 pi 的运行时和文件（只用 pi 的类型）：什么算失败（`failure`）、命中哪条规则（`rules`）、按什么参数（`policy`，一张字段表管校验、帮助、补全和 JSON Schema）、等多久（`delay`）、什么时候停（`tracker`）；`config` 把它们拼成设置文件的模型，并把几份设置文件按顺序合并；`schema` 从字段表生成 `onward.schema.json` |
+| `src/extension/` | 接 pi：`onward` 处理事件并续跑，`command` 是 `/onward`，`autocomplete` 让它的参数里按 Tab 补参数、不补文件名，`settings` 读写全局和项目级设置文件并合并，`text` 是给人看的文字，`render` 画会话里的续跑消息，`install` 把它们装起来；`index` 是 pi 加载的入口，只决定设置文件放在哪里                                         |
+| `tests/`         | `node:test`，目录与 `src/` 对应；`tests/support/fake-pi.ts` 按 pi 的真实事件顺序发事件，直接装 `install`，不加载 pi 本体；补全在 pi-tui 真实的编辑器里按键。入口和设置文件的位置由 `scripts/check-extension.mjs` 用 pi 自己的加载器检查                                                                                       |

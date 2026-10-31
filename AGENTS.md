@@ -27,8 +27,8 @@
 
 - 公开接口指下面这些，内部模块、测试和日志措辞不算：
   - 设置文件 `onward.json` 的位置、字段、取值和默认值
+  - `onward.schema.json` 的地址和它允许的写法
   - `/onward` 的动作和参数
-  - 环境变量 `PI_ONWARD_CONFIG`
   - README 写明的续跑行为：什么算失败、发消息和重发的区别、次数上限、间隔、什么时候停
   - `package.json` 的 `engines.node`、`peerDependencies`、`pi.extensions`
 - 用户确认接口稳定后再发 1.0.0

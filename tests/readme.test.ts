@@ -2,8 +2,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { matchFailure, parseConfig } from "../src/policy/config.ts";
+import { matchFailure } from "../src/policy/config.ts";
 import { DEFAULT_POLICY } from "../src/policy/policy.ts";
+import { parseConfig } from "./support/config.ts";
 import { empty, err } from "./support/fake-pi.ts";
 
 const readText = (file: string) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");

@@ -1,6 +1,6 @@
 {
   "name": "@cobia/pi-onward",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Keep a pi run going after it ends in an error or an empty reply: user-written rules decide whether to send a visible message or silently resend, with per-rule budgets, backoff and a same-error stop.",
   "keywords": [
     "pi",
@@ -25,12 +25,14 @@
   },
   "files": [
     "src/",
-    "example.json"
+    "example.json",
+    "onward.schema.json"
   ],
   "scripts": {
     "test": "node scripts/run-tests.mjs",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
     "check:extension": "node scripts/check-extension.mjs",
+    "gen:schema": "node --import tsx scripts/generate-schema.ts",
     "check": "npm run check:biome && npm run typecheck && npm test && npm run check:extension",
     "prepublishOnly": "npm run check",
     "lint": "node scripts/biome-check.mjs --lint",

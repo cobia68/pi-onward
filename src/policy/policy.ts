@@ -1,8 +1,8 @@
 /**
- * 续跑的参数：一张字段表，设置文件、规则、命令、帮助和补全都用它。设置文件顶层写的就是每条规则的默认值，
- * 规则里同名的字段覆盖它。
+ * 续跑的参数：一张字段表，设置文件、规则、命令、帮助、补全和 JSON Schema 都用它。设置文件顶层写的就是每条规则的
+ * 默认值，规则里同名的字段覆盖它。
  */
-import { DELAY_SYNTAX, type Delay, delayText, parseDelay } from "./delay.ts";
+import { DELAY_PATTERN, DELAY_SYNTAX, type Delay, delayText, parseDelay } from "./delay.ts";
 
 /** message 发一条看得见的消息再接着跑；resend 从上下文里省略失败的那条，重发同一个请求；stop 不续跑，只提醒。 */
 export type Action = "message" | "resend" | "stop";
@@ -33,7 +33,13 @@ export interface Field<K extends keyof Policy = keyof Policy> {
 	fromText(text: string): unknown;
 	/** 给人看的值。 */
 	show(value: Policy[K]): string;
+	/** 设置文件里这个字段的 JSON Schema：和 `read` 收下的一致，只管写法，含义上的检查留给 `read`。 */
+	schema: Readonly<Record<string, unknown>>;
 }
+
+/** 两个次数上限的范围。一条规则最多续跑 maxRetries 次，同错上限比它大时用不上，所以范围一样。 */
+const RETRIES = { min: 1, max: 50 } as const;
+const PROMPT_MAX = 500;
 
 const ACTIONS: readonly { value: Action; description: string }[] = [
 	{ value: "message", description: "发一条看得见的消息再接着跑" },
@@ -55,33 +61,37 @@ export const FIELDS: readonly Field[] = [
 				: { problem: "只能是 message、resend 或 stop" },
 		fromText: (text) => text,
 		show: String,
+		schema: { enum: ACTIONS.map((item) => item.value) },
 	}),
 	field({
 		name: "prompt",
 		syntax: "文字",
 		description: "message 发的消息，可含 {attempt} {max} {error} {rule}",
 		read: (v) =>
-			typeof v === "string" && v.trim() && v.trim().length <= 500
+			typeof v === "string" && v.trim() && v.trim().length <= PROMPT_MAX
 				? { value: v.trim() }
-				: { problem: "需要 1–500 字的文字" },
+				: { problem: `需要 1–${PROMPT_MAX} 字的文字` },
 		fromText: (text) => text,
 		show: (prompt) => `「${prompt}」`,
+		schema: { type: "string", pattern: "\\S", maxLength: PROMPT_MAX },
 	}),
 	field({
 		name: "maxRetries",
-		syntax: "1–50",
+		syntax: `${RETRIES.min}–${RETRIES.max}`,
 		description: "连续失败时最多续跑几次",
-		read: (v) => integer(v, 1, 50),
+		read: (v) => integer(v, RETRIES.min, RETRIES.max),
 		fromText: number,
 		show: String,
+		schema: { type: "integer", minimum: RETRIES.min, maximum: RETRIES.max },
 	}),
 	field({
 		name: "maxSameError",
-		syntax: "1–100",
+		syntax: `${RETRIES.min}–${RETRIES.max}`,
 		description: "同一个错误最多续跑几次，再出现就彻底停",
-		read: (v) => integer(v, 1, 100),
+		read: (v) => integer(v, RETRIES.min, RETRIES.max),
 		fromText: number,
 		show: String,
+		schema: { type: "integer", minimum: RETRIES.min, maximum: RETRIES.max },
 	}),
 	field({
 		name: "delay",
@@ -93,13 +103,15 @@ export const FIELDS: readonly Field[] = [
 		},
 		fromText: (text) => text,
 		show: delayText,
+		schema: { type: "string", pattern: DELAY_PATTERN },
 	}),
 ];
 
 export const FIELD_NAMES: readonly string[] = FIELDS.map((item) => item.name);
 
+/** 字段名区分大小写，和设置文件一样。 */
 export function fieldNamed(name: string): Field | undefined {
-	return FIELDS.find((item) => item.name.toLowerCase() === name.toLowerCase());
+	return FIELDS.find((item) => item.name === name);
 }
 
 export const DEFAULT_POLICY: Readonly<Policy> = Object.freeze<Policy>({
