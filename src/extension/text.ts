@@ -41,7 +41,8 @@ const IDLE = "💤";
 const STOPPED = "🛑";
 
 const UNTIL_FIXED = "修好之前不会自动续跑";
-const addRules = (where = "设置文件") => `在${where}的 rules 里写规则（常见规则见 README），再 /${COMMAND} reload`;
+const addRules = () => `在设置文件的 rules 里写规则（常见规则见 README），再 /${COMMAND} reload`;
+const SEE_SHOW = `/${COMMAND} show 查看`;
 
 /** 两份设置文件给人看的名字：表格、来源和问题前面都用它。 */
 const SCOPE_NAMES: Readonly<Record<Scope, string>> = { global: "全局", project: "项目级" };
@@ -387,39 +388,25 @@ function usableRules(config: Config): number {
 // ── 运行中的通知 ──
 
 /**
- * 启动时值得说的事：用上了项目级设置（仓库里带的设置能让 onward 替你给模型发消息，要让人知道）；设置文件读不了
- * 或有问题，说是哪一份（关着也说，可能就是 enabled 写错了）；没有可用的规则。
+ * 启动时值得说的事，最多一条：设置文件读不了或有问题，说是哪一份（关着也说，可能就是 enabled 写错了）；用上了项目级设置
+ * （仓库里带的设置能让 onward 替你给模型发消息，要让人知道）；没有可用的规则。不写路径和报错原文，细节在
+ * `/onward show`。pi 只留下连着的提示里的最后一条，分开发会互相顶掉。
  */
-export function startupNotices(settings: Settings): Notice[] {
+export function startupNotice(settings: Settings): Notice | undefined {
 	const { config } = settings;
-	const project = settings.file("project");
-	// 读不了的项目级文件不说「用上了」：下面的警告已经写了它的路径。
-	const notices: Notice[] =
-		project?.source.kind === "file" ? [info(`onward：用上了项目级设置 ${project.path}，它写了的字段覆盖全局的`)] : [];
-	const broken = brokenFiles(settings);
-	if (broken.length)
-		return [
-			...notices,
-			...broken.map((file) =>
-				warning(`${STOPPED} onward：${file.path} 读不了：${file.source.error}，${UNTIL_FIXED}`),
-			),
-		];
-	if (config.problems.length)
-		return [
-			...notices,
-			...settings.files
-				.filter((file) => file.layer.problems.length)
-				.map((file) =>
-					warning(
-						`${STOPPED} onward：${file.path} 有 ${file.layer.problems.length} 处问题，${UNTIL_FIXED}（/${COMMAND} show 查看）`,
-					),
-				),
-		];
-	if (config.enabled && !usableRules(config)) {
-		const where = (settings.origin("rules") === "project" && project) || settings.file("global");
-		notices.push(info(`${IDLE} onward：没有可用的规则，出错时不会自动续跑；${addRules(` ${where.path} `)}`));
-	}
-	return notices;
+	const bad = settings.files.flatMap((file) => {
+		const name = `${SCOPE_NAMES[file.scope]}设置`;
+		if (file.source.kind === "broken") return [`${name}读不了`];
+		return file.layer.problems.length ? [`${name}有 ${file.layer.problems.length} 处问题`] : [];
+	});
+	if (bad.length) return warning(`${STOPPED} onward：${bad.join("，")}，${UNTIL_FIXED}（${SEE_SHOW}）`);
+	const project = settings.file("project")?.source.kind === "file";
+	const idle = config.enabled && !usableRules(config);
+	if (project && idle)
+		return info(`${IDLE} onward：用上了项目级设置；没有可用的规则，出错时不会自动续跑（${SEE_SHOW}）`);
+	if (project) return info(`onward：用上了项目级设置（${SEE_SHOW}）`);
+	if (idle) return info(`${IDLE} onward：没有可用的规则，出错时不会自动续跑（${SEE_SHOW}）`);
+	return undefined;
 }
 
 /**

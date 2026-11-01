@@ -48,8 +48,8 @@ test("不写 --scope 只改全局，项目级不动", async () => {
 test("任何一份读不懂，整份不生效：不会只按另一份续跑", async () => {
 	const broken = harness({ config: { delay: "0s", rules: [{ name: "any" }] }, project: "{ not json" });
 	await start(broken);
-	assert.match(broken.warnings()[0], /onward\.json 读不了：不是合法 JSON/);
-	assert.ok(broken.warnings()[0]!.includes(broken.projectPath));
+	assert.deepEqual(broken.warnings(), ["🛑 onward：项目级设置读不了，修好之前不会自动续跑（/onward show 查看）"]);
+	assert.ok((await broken.command("show")).includes(broken.projectPath), "路径和报错原文在 show 里");
 	assert.equal(await broken.boundary(err()), undefined);
 	assert.match(await broken.command("status"), /^🛑 onward：设置文件读不了/);
 	assert.match(await broken.command("show rules"), /^设置文件读不了[\s\S]*项目级 {2}.*\n {10}读不了：不是合法 JSON/);
@@ -59,17 +59,14 @@ test("任何一份读不懂，整份不生效：不会只按另一份续跑", as
 	const bad = harness({ config: { delay: "0s", rules: [{ name: "any" }] }, project: { colour: "red" } });
 	await start(bad);
 	assert.deepEqual(bad.notes, [
-		["info", `onward：用上了项目级设置 ${bad.projectPath}，它写了的字段覆盖全局的`],
-		["warning", `🛑 onward：${bad.projectPath} 有 1 处问题，修好之前不会自动续跑（/onward show 查看）`],
+		["warning", "🛑 onward：项目级设置有 1 处问题，修好之前不会自动续跑（/onward show 查看）"],
 	]);
 	assert.equal(await bad.boundary(err()), undefined);
 	assert.match(await bad.command("show rules"), /^- 项目级：colour 不认识$/m, "问题前面标上是哪一份的");
 
 	const user = harness({ config: { maxRetries: 99 }, project: { rules: [{ name: "any" }] } });
 	await start(user);
-	assert.deepEqual(user.warnings(), [
-		`🛑 onward：${user.configPath} 有 1 处问题，修好之前不会自动续跑（/onward show 查看）`,
-	]);
+	assert.deepEqual(user.warnings(), ["🛑 onward：全局设置有 1 处问题，修好之前不会自动续跑（/onward show 查看）"]);
 	assert.match(await user.command("show rules"), /^- 全局：maxRetries 需要 1–50 的整数$/m);
 });
 
@@ -181,10 +178,10 @@ test("show：每个参数来自哪一份；规则来自哪一份", async () => {
 	assert.match(await single.command("show rules"), /^规则（按顺序/, "只有一份时不说来自哪");
 });
 
-test("启动时：用上了项目级设置要说一句；没有可用的规则时指到规则所在的那份", async () => {
+test("启动时最多一条：用上了项目级设置要说；没有可用的规则也要说，两件事合成一句", async () => {
 	const h = harness({ config: { rules: [{ name: "any" }] }, project: { maxRetries: 2 } });
 	await start(h);
-	assert.deepEqual(h.notes, [["info", `onward：用上了项目级设置 ${h.projectPath}，它写了的字段覆盖全局的`]]);
+	assert.deepEqual(h.notes, [["info", "onward：用上了项目级设置（/onward show 查看）"]]);
 
 	const none = harness({ config: { rules: [{ name: "any" }] } });
 	await start(none);
@@ -192,8 +189,14 @@ test("启动时：用上了项目级设置要说一句；没有可用的规则�
 
 	const empty = harness({ config: { rules: [{ name: "any" }] }, project: { rules: [] } });
 	await start(empty);
-	assert.match(empty.notes.at(-1)![1], /^💤 onward：没有可用的规则/);
-	assert.ok(empty.notes.at(-1)![1].includes(` ${empty.projectPath} `), "rules 写在项目级");
+	assert.deepEqual(empty.notes, [
+		["info", "💤 onward：用上了项目级设置；没有可用的规则，出错时不会自动续跑（/onward show 查看）"],
+	]);
+	assert.match(
+		await empty.command("show"),
+		/^规则来自项目级设置，全局的 rules 不生效\n没有可用的规则/m,
+		"show 说规则在哪份",
+	);
 });
 
 test("reload 两份都重读", async () => {

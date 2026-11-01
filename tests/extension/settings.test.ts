@@ -57,7 +57,8 @@ test("坏 JSON：不续跑、拒绝写、提示", async () => {
 	const path = writeConfig("{ not json");
 	const h = harness({ configPath: path });
 	await h.emit("session_start", { reason: "startup" });
-	assert.match(h.warnings()[0], /读不了：不是合法 JSON/);
+	assert.deepEqual(h.warnings(), ["🛑 onward：全局设置读不了，修好之前不会自动续跑（/onward show 查看）"]);
+	assert.match(await h.command("show"), /读不了：不是合法 JSON/);
 	assert.match(await h.command("set maxRetries=5"), /读不了（不是合法 JSON.*先修好；未做任何修改$/);
 	assert.doesNotMatch(await h.command("status"), /最多 5 次/, "没有改");
 	assert.match(await h.command("reset"), /未做任何修改$/);
@@ -70,7 +71,8 @@ test("顶层不是对象：和坏 JSON 一样，不当成空设置，也不被�
 		const path = writeConfig(text);
 		const h = harness({ configPath: path });
 		await h.emit("session_start", { reason: "startup" });
-		assert.match(h.warnings()[0], /读不了：顶层需要是对象/, text);
+		assert.deepEqual(h.warnings(), ["🛑 onward：全局设置读不了，修好之前不会自动续跑（/onward show 查看）"], text);
+		assert.match(await h.command("show"), /读不了：顶层需要是对象/, text);
 		assert.match(await h.command("set maxRetries=5"), /未做任何修改$/, text);
 		assert.equal(readFileSync(path, "utf8"), text, text);
 	}
@@ -79,7 +81,7 @@ test("顶层不是对象：和坏 JSON 一样，不当成空设置，也不被�
 test("内容有问题：启动和状态都说清不会续跑；命令照常合并写入，修好就生效", async () => {
 	const h = harness({ config: { enabled: "yes", rules: [{ name: "any" }] } });
 	await h.emit("session_start", { reason: "startup" });
-	assert.equal(h.warnings()[0], `🛑 onward：${h.configPath} 有 1 处问题，修好之前不会自动续跑（/onward show 查看）`);
+	assert.equal(h.warnings()[0], "🛑 onward：全局设置有 1 处问题，修好之前不会自动续跑（/onward show 查看）");
 	assert.match(await h.command("status"), /^🛑 onward：开，但设置文件有 1 处问题/);
 	assert.equal(h.notes.at(-1)![0], "warning");
 	assert.match(await h.command("on"), /^⏩ onward：开，1 条规则生效/);
@@ -88,7 +90,7 @@ test("内容有问题：启动和状态都说清不会续跑；命令照常合�
 	// 关着也提醒：可能就是要关掉的那一项写错了。
 	const off = harness({ config: { enabled: false, maxRetries: 0 } });
 	await off.emit("session_start", { reason: "startup" });
-	assert.match(off.warnings()[0], /onward\.json 有 1 处问题/);
+	assert.match(off.warnings()[0], /^🛑 onward：全局设置有 1 处问题/);
 	assert.match(await off.command("status"), /^🛑 onward：关；设置文件有 1 处问题/);
 });
 

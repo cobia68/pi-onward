@@ -5,7 +5,7 @@ import { registerCommand } from "./command.ts";
 import { CUSTOM_TYPE, Onward } from "./onward.ts";
 import { renderContinue } from "./render.ts";
 import { type ConfigPaths, Settings } from "./settings.ts";
-import { say, startupNotices } from "./text.ts";
+import { say, startupNotice } from "./text.ts";
 
 export function install(pi: ExtensionAPI, paths: ConfigPaths): void {
 	const settings = new Settings(paths);
@@ -16,7 +16,8 @@ export function install(pi: ExtensionAPI, paths: ConfigPaths): void {
 		settings.bind(ctx.cwd);
 		// reload 和切换会话时 pi 会清掉扩展装的补全，所以每次都装。
 		ctx.ui.addAutocompleteProvider(argumentTabCompletion);
-		for (const notice of startupNotices(settings)) say(ctx, notice);
+		const notice = startupNotice(settings);
+		if (notice) say(ctx, notice);
 	});
 	pi.on("agent_start", (_event, ctx) => onward.agentStart(ctx));
 	pi.on("message_end", (event, ctx) => onward.messageEnd(event, ctx));
