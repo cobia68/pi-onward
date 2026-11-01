@@ -208,6 +208,7 @@ export function layerNotice(settings: Settings, scope: Scope, rulesOnly: boolean
 			item.name,
 			shown(item, layer.defaults),
 		]),
+		...(layer.quietStartup === undefined ? [] : [["quietStartup", String(layer.quietStartup)] as [string, string]]),
 	];
 	const rules =
 		layer.rules === undefined
@@ -260,6 +261,14 @@ function rulesFrom(settings: Settings): string | undefined {
 	if (settings.projectFile === undefined || origin === undefined) return undefined;
 	const replaced = origin === "project" && settings.has("global", "rules");
 	return `规则来自${SCOPE_NAMES[origin]}设置${replaced ? "，全局的 rules 不生效" : ""}`;
+}
+
+/** 改了 quietStartup 之后：onward 的启动提示现在怎么显示。 */
+export function quietLine(quiet: boolean | undefined): string {
+	if (quiet === undefined) return "onward 的启动提示跟着 pi 的 quietStartup";
+	return quiet
+		? "onward 的启动提示不显示；设置有问题时照样警告"
+		: "onward 的启动提示照常显示，不管 pi 的 quietStartup";
 }
 
 /** 改了开关或参数之后：有项目级设置在用、或者改的就是项目级时，说改的是哪一份；只有一份时说了也多余。 */
@@ -391,8 +400,11 @@ function usableRules(config: Config): number {
  * 启动时值得说的事，最多一条：设置文件读不了或有问题，说是哪一份（关着也说，可能就是 enabled 写错了）；用上了项目级设置
  * （仓库里带的设置能让 onward 替你给模型发消息，要让人知道）；没有可用的规则。不写路径和报错原文，细节在
  * `/onward show`。pi 只留下连着的提示里的最后一条，分开发会互相顶掉。
+ *
+ * `quiet()` 为真时后两种不说，和 pi 的 quietStartup 一样只收起平常的；设置有问题照样警告，修好之前不会自动续跑。
+ * 只在有平常的话要说时才问它。
  */
-export function startupNotice(settings: Settings): Notice | undefined {
+export function startupNotice(settings: Settings, quiet: () => boolean): Notice | undefined {
 	const { config } = settings;
 	const bad = settings.files.flatMap((file) => {
 		const name = `${SCOPE_NAMES[file.scope]}设置`;
@@ -402,11 +414,11 @@ export function startupNotice(settings: Settings): Notice | undefined {
 	if (bad.length) return warning(`${STOPPED} onward：${bad.join("，")}，${UNTIL_FIXED}（${SEE_SHOW}）`);
 	const project = settings.file("project")?.source.kind === "file";
 	const idle = config.enabled && !usableRules(config);
+	if (!(project || idle) || quiet()) return undefined;
 	if (project && idle)
 		return info(`${IDLE} onward：用上了项目级设置；没有可用的规则，出错时不会自动续跑（${SEE_SHOW}）`);
 	if (project) return info(`onward：用上了项目级设置（${SEE_SHOW}）`);
-	if (idle) return info(`${IDLE} onward：没有可用的规则，出错时不会自动续跑（${SEE_SHOW}）`);
-	return undefined;
+	return info(`${IDLE} onward：没有可用的规则，出错时不会自动续跑（${SEE_SHOW}）`);
 }
 
 /**

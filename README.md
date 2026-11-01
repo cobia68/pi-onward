@@ -56,7 +56,7 @@ pi install npm:@cobia/pi-onward
 
 ## 📝 设置文件
 
-`~/.pi/agent/onward.json`：在 pi 的配置目录里，设了 `PI_CODING_AGENT_DIR` 就跟着它。没有这个文件、或者里面没有规则，出错时什么都不做，启动时提醒一句。`/onward` 命令只改 `enabled` 和顶层的参数，`rules` 要手写，改完 `/onward reload`。某个项目要用不同的规则或参数时，在项目里另写一份，见[项目级设置](#项目级设置)。
+`~/.pi/agent/onward.json`：在 pi 的配置目录里，设了 `PI_CODING_AGENT_DIR` 就跟着它。没有这个文件、或者里面没有规则，出错时什么都不做，启动时提醒一句。`/onward` 命令只改 `enabled`、顶层的参数和 `quietStartup`，`rules` 要手写，改完 `/onward reload`。某个项目要用不同的规则或参数时，在项目里另写一份，见[项目级设置](#项目级设置)。
 
 文件开头写上 `"$schema": "https://raw.githubusercontent.com/cobia68/pi-onward/main/onward.schema.json"`，VS Code 这类编辑器就能补全字段、检查取值；全局和项目级都能写，[`example.json`](example.json) 里已经写了。写法对、意思不对的（例如正则写错、重名的规则、封顶小于起步），编辑器查不出来，以 `/onward show` 为准。
 
@@ -71,6 +71,7 @@ pi install npm:@cobia/pi-onward
   "maxRetries": 10,              // 1–50
   "maxSameError": 10,            // 1–50
   "delay": "3s..15s",            // 或 "5s,10s,30s"
+  "quietStartup": true,          // 启动提示不显示；不写时跟着 pi 的，只能写在全局
   "rules": [
     {
       "name": "relay-auth",
@@ -116,14 +117,22 @@ pi install npm:@cobia/pi-onward
 
 ### 项目级设置
 
-在启动 pi 的目录下写 `.pi/onward.json`，写法和上面一样，只写和全局不同的字段。例如这个项目里不续跑，只要写 `{ "enabled": false }`，或者输入 `/onward --scope project off`。
+在启动 pi 的目录下写 `.pi/onward.json`，写法和上面一样（`quietStartup` 除外，见[启动提示](#启动提示)），只写和全局不同的字段。例如这个项目里不续跑，只要写 `{ "enabled": false }`，或者输入 `/onward --scope project off`。
 
 - **只看当前目录**：只读启动 pi 的那个目录下的 `.pi/onward.json`，不往上级目录找，和 pi 读 `.pi/settings.json` 一样。在仓库的子目录里启动 pi，仓库根目录的那份不生效。
 - **和全局合并**：优先级是内置默认值 < 全局 < 项目级。开关和顶层的参数逐个字段合并，项目级写了的覆盖全局的，都没写的用内置默认值。`rules` 整份替换、不拼接：项目级写了 `rules` 就只用它的，写成 `[]` 就是这个项目里没有规则；没写才用全局的。规则按顺序第一条命中、不能重名，拼在一起顺序和重名都说不清。
 - **命令看或改哪一份由 `--scope` 定**：写在动作前，`/onward --scope project set maxRetries=3`，也可以写成 `--scope=project`。`on`、`off`、`set`、`unset`、`reset` 不写或写 `global` 改全局，和 pi 的 `install`、`config` 不加 `--local` 时一样，写 `project` 改这一份，文件不在就建，去掉本来就没有的参数时不建。`show` 不写时看合并后的结果，写了只看那一份文件写了什么，不合并、不填默认值。其他动作不认它；写在动作后不执行，回复给出正确的写法。只写 `/onward --scope project` 时弹出只看、只改这一份的菜单，`/onward` 的菜单里也有进到每一份的项。改了全局、项目级又写了同名字段时，回复会说这个项目里仍按项目级的走，并给出跟随全局的写法 `/onward --scope project unset <字段>`。
-- **看得见在用哪一份**：用上了项目级设置时启动提醒一句，哪一份有问题也说是哪一份；`/onward status` 列出两份文件，`/onward show` 写明每个参数和规则来自哪一份。
+- **看得见在用哪一份**：用上了项目级设置时启动提醒一句（关掉启动提示时不说，见[启动提示](#启动提示)），哪一份有问题也说是哪一份；`/onward status` 列出两份文件，`/onward show` 写明每个参数和规则来自哪一份。
 
 **别人的仓库可能自带 `.pi/onward.json`**，和 `AGENTS.md` 一样先看一遍再用：它的 `prompt` 会当成你的消息发给模型，次数和间隔决定多发多少真实请求。在这样的目录里启动 pi 它就生效，和 pi 信不信任这个项目无关。
+
+### 启动提示
+
+启动时 onward 最多说一句：用上了项目级设置、没有可用的规则，或者哪一份设置有问题。细节用 `/onward show` 查看。
+
+- **跟着 pi 的 `quietStartup`**：pi 的 `settings.json` 里 `quietStartup` 是 `true` 或 `"header"` 时，前两种不说。设置有问题照样警告：修好之前不会自动续跑，和 pi 自己的启动警告一样不收起。
+- **onward 自己的 `quietStartup`**：写在全局设置里，`true` 不显示，`false` 照常显示、不管 pi 的，不写时跟着 pi 的。可以用 `/onward set quietStartup=true` 改，`/onward unset quietStartup` 去掉。只能写在全局：项目级的一份写了算一处问题，免得别人的仓库关掉「用上了项目级设置」这句提醒。
+- `pi --verbose` 只让 pi 自己的启动信息照常显示，扩展读不到这个参数；要看 onward 的状态用 `/onward status`。
 
 ## 📋 常见规则
 
@@ -222,10 +231,10 @@ pi install npm:@cobia/pi-onward
 | `/onward on` · `off`             | 开关                                                                                                                                                                             |
 | `/onward show`                   | 各项参数的值和来源（全局设置、项目级设置或内置默认值）、规则、设置文件里的问题                                                                                                   |
 | `/onward show rules`             | 只看规则                                                                                                                                                                         |
-| `/onward set 字段=值 …`          | 改顶层的参数，规则没写的字段用它；例如 `set action=resend maxRetries=20 delay=5s,10s,30s`                                                                                        |
-| `/onward unset 字段 …`           | 去掉开关 `enabled` 或参数，继承下一层：项目级的退回全局，全局的退回内置默认值，例如 `unset delay`、`--scope project unset enabled`                                               |
+| `/onward set 字段=值 …`          | 改顶层的参数，规则没写的字段用它；例如 `set action=resend maxRetries=20 delay=5s,10s,30s`。也能改启动提示 `quietStartup`                                                         |
+| `/onward unset 字段 …`           | 去掉开关 `enabled`、参数或 `quietStartup`，继承下一层：项目级的退回全局，全局的退回内置默认值，例如 `unset delay`、`--scope project unset enabled`                               |
 | `/onward reload`                 | 重新读两份设置文件                                                                                                                                                               |
-| `/onward reset`                  | 去掉 `enabled` 和顶层的参数，保留手写的 `rules`                                                                                                                                  |
+| `/onward reset`                  | 去掉 `enabled`、顶层的参数和 `quietStartup`，保留手写的 `rules`                                                                                                                  |
 | `/onward --scope project <动作>` | `on`、`off`、`set`、`unset`、`reset` 改项目级设置，不写 `--scope` 或写 `--scope global` 改全局；`show` 只看项目级文件写了什么；只写 `--scope project` 弹出只看、只改项目级的菜单 |
 | `/onward --help`                 | 有哪些动作                                                                                                                                                                       |
 | `/onward <动作> --help`          | 这个动作的用法和说明；`set --help`、`unset --help` 还列出字段和默认值。写了 `--help` 就只显示帮助，不执行                                                                        |
@@ -234,7 +243,7 @@ pi install npm:@cobia/pi-onward
 - `--scope` 只能写在动作前：`/onward set maxRetries=3 --scope project` 不执行，回复给出正确的写法。见[项目级设置](#项目级设置)。
 - 值里有空格时加双引号：`/onward set prompt="接着做，第 {attempt} 次"`。
 - 命令不会新增规则，`set rules=…` 会被拒绝。
-- 输入时按 Tab 补全 `--scope` 和它的取值、动作、字段名、`action` 的取值和 `--help`，选中一项再按 Tab 补下一层。`--scope` 只在动作前给，写了它之后只给改设置的动作。每个动作后面都给 `--help`；写了 `--help` 就是结束，什么都不再补。写过的字段不再给，引号里的值不补。
+- 输入时按 Tab 补全 `--scope` 和它的取值、动作、字段名、`action` 和 `quietStartup` 的取值和 `--help`，选中一项再按 Tab 补下一层。`--scope` 只在动作前给，写了它之后只给改设置的动作。每个动作后面都给 `--help`；写了 `--help` 就是结束，什么都不再补。写过的字段不再给，引号里的值不补。
 
 ## ❓ 常见问题
 

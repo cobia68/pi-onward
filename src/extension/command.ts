@@ -26,6 +26,7 @@ import {
 	layerNotice,
 	menuTitle,
 	type Notice,
+	quietLine,
 	resetLine,
 	rulesNotice,
 	SCOPE,
@@ -52,6 +53,18 @@ export type Command =
 	| { kind: "error"; message: string; topic?: string };
 
 const HELP = "--help";
+/** 启动提示的开关：不是规则的参数，只能写在全局设置。 */
+const QUIET = "quietStartup";
+/** 帮助的字段表里 quietStartup 那一行。 */
+const QUIET_HELP: [string, string] = [
+	QUIET,
+	[
+		"启动时的提示（用上了项目级设置、没有可用的规则）；设置有问题时照样警告。只能写在全局设置",
+		"true：不显示",
+		"false：照常显示，不管 pi 的 quietStartup",
+		"不写：跟着 pi 的 quietStartup（默认）",
+	].join("\n"),
+];
 
 /** 改设置的动作的帮助里都有这一行。不写路径：设置文件放在哪只由 index.ts 决定，实际的路径在 status 里。 */
 const SCOPE_HELP = `${SCOPE} 写在动作前：不写或 global 改全局设置，project 改当前目录的项目级设置；两份在哪见 /${COMMAND} status`;
@@ -134,7 +147,7 @@ const ACTIONS: readonly ActionSpec[] = [
 		args: "字段 …",
 		description: "去掉开关或参数，继承下一层",
 		details: [
-			"可以一次写几个，开关 enabled 也能去掉；有不认识或写了两次的字段就一项都不改",
+			"可以一次写几个，开关 enabled、启动提示 quietStartup 也能去掉；有不认识或写了两次的字段就一项都不改",
 			"规则里写的同名字段不受影响",
 			SCOPE_FALLBACK,
 		],
@@ -152,7 +165,11 @@ const ACTIONS: readonly ActionSpec[] = [
 		name: "reset",
 		args: "",
 		description: "去掉开关和参数，保留手写的 rules",
-		details: ["开关和参数都去掉；rules 和其他手写的内容留着", "正在等的续跑立刻打断，计数清零", SCOPE_FALLBACK],
+		details: [
+			"开关、参数和 quietStartup 都去掉；rules 和其他手写的内容留着",
+			"正在等的续跑立刻打断，计数清零",
+			SCOPE_FALLBACK,
+		],
 		scoped: "write",
 	},
 ];
@@ -252,9 +269,11 @@ function execute(
 		}
 		case "update": {
 			const saved = settings.update(command.scope, command.change);
+			const keys = changedKeys(command.change);
 			const done = note(
 				scopeLine(settings, command.scope),
-				shadowLine(settings, command.scope, changedKeys(command.change)),
+				keys.includes(QUIET) ? quietLine(settings.config.quietStartup) : undefined,
+				shadowLine(settings, command.scope, keys),
 			);
 			return changedNotice(saved, settings, onward.progress(), done);
 		}
@@ -406,7 +425,7 @@ function none(action: string, rest: string[]): Command | undefined {
 
 function parseSet(tokens: string[], scope: Scope): Command {
 	if (!tokens.length)
-		return { kind: "error", message: `set 要写 字段=值；可用 ${FIELD_NAMES.join("、")}`, topic: "set" };
+		return { kind: "error", message: `set 要写 字段=值；可用 ${settable(scope).join("、")}`, topic: "set" };
 	const problems: string[] = [];
 	const values: Record<string, unknown> = {};
 	for (const token of tokens) {
@@ -417,21 +436,37 @@ function parseSet(tokens: string[], scope: Scope): Command {
 		}
 		const key = token.slice(0, equals);
 		const text = token.slice(equals + 1);
-		const known = paramField(key, scope);
-		if (typeof known === "string") {
-			problems.push(known);
+		if (Object.hasOwn(values, key)) {
+			problems.push(`${key} 写了两次`);
 			continue;
 		}
-		if (known.name in values) {
-			problems.push(`${known.name} 写了两次`);
-			continue;
-		}
-		const value = known.fromText(text);
-		const read = known.read(value);
-		if ("problem" in read) problems.push(`${known.name} ${read.problem}`);
-		else values[known.name] = value;
+		const parsed = key === QUIET ? quietValue(text, scope) : paramValue(key, text, scope);
+		if ("problem" in parsed) problems.push(parsed.problem);
+		else values[parsed.name] = parsed.value;
 	}
 	return problems.length ? rejected(problems, "set") : { kind: "update", scope, change: { set: values } };
+}
+
+type Parsed = { name: string; value: unknown } | { problem: string };
+
+function paramValue(key: string, text: string, scope: Scope): Parsed {
+	const known = paramField(key, scope, settable(scope));
+	if (typeof known === "string") return { problem: known };
+	const value = known.fromText(text);
+	const read = known.read(value);
+	return "problem" in read ? { problem: `${known.name} ${read.problem}` } : { name: known.name, value };
+}
+
+/** quietStartup 只认 true、false，只能写在全局：项目级的能关掉「用上了项目级设置」这句提醒。 */
+function quietValue(text: string, scope: Scope): Parsed {
+	if (scope !== "global") return { problem: `${QUIET} 只能写在全局设置，不写 ${SCOPE} 就是全局` };
+	if (text !== "true" && text !== "false") return { problem: `${QUIET} 需要 true 或 false` };
+	return { name: QUIET, value: text === "true" };
+}
+
+/** set 能写的字段：参数，全局还有 quietStartup。 */
+function settable(scope: Scope): readonly string[] {
+	return scope === "global" ? [...FIELD_NAMES, QUIET] : FIELD_NAMES;
 }
 
 /**
@@ -452,7 +487,8 @@ function parseUnset(tokens: string[], scope: Scope): Command {
 }
 
 function unsetKey(token: string, scope: Scope): { name: string } | { problem: string } {
-	if (token === "enabled") return { name: "enabled" };
+	// quietStartup 在哪一份都能去掉：项目级写了它是一处问题，去掉就好了。
+	if (token === "enabled" || token === QUIET) return { name: token };
 	const known = paramField(token, scope, COMMAND_KEYS);
 	return typeof known === "string" ? { problem: known } : { name: known.name };
 }
@@ -508,7 +544,9 @@ function actionHelp(spec: ActionSpec): string {
 			"说明",
 			[...spec.details, ...(spec.scoped === "write" ? [SCOPE_HELP] : [])].map((line) => `  ${line}`),
 		),
-		...(spec.fields ? section("字段", table(FIELDS.map((item) => [item.name, fieldHelp(item)]))) : []),
+		...(spec.fields
+			? section("字段", table([...FIELDS.map((item): [string, string] => [item.name, fieldHelp(item)]), QUIET_HELP]))
+			: []),
 		...section(
 			"示例",
 			(spec.examples ?? []).map((line) => `  ${line}`),
@@ -633,44 +671,66 @@ function candidates(typed: string[], current: string): Candidate[] {
 		];
 	const spec = actionNamed(first);
 	if (!spec || (scoped && !spec.scoped)) return [];
-	const args = argumentCandidates(spec.name, rest, current);
+	const args = argumentCandidates(spec.name, rest, current, scoped ? scopeNamed(words[1])! : "global");
 	return args ? [...args, { value: HELP, description: `显示 ${spec.name} 的帮助，不执行` }] : [];
 }
 
 /** 动作后面的参数；`undefined`：这里已经写错了，执行时会被拒绝，--help 也不给。 */
-function argumentCandidates(action: string, rest: string[], current: string): Candidate[] | undefined {
+function argumentCandidates(action: string, rest: string[], current: string, scope: Scope): Candidate[] | undefined {
 	switch (action) {
 		case "show":
 			if (!rest.length) return [{ value: "rules", description: "只看规则" }];
 			return rest.length === 1 && rest[0] === "rules" ? [] : undefined;
 		case "set":
 		case "unset":
-			return fieldCandidates(action, rest, current);
+			return fieldCandidates(action, rest, current, scope);
 		default:
 			return rest.length ? undefined : [];
 	}
 }
 
-function fieldCandidates(action: string, rest: string[], current: string): Candidate[] | undefined {
+/** quietStartup= 后面能写的。 */
+const QUIET_CHOICES: readonly Candidate[] = [
+	{ value: "true", description: "启动时不显示 onward 的提示；设置有问题时照样警告" },
+	{ value: "false", description: "照常显示，不管 pi 的 quietStartup" },
+];
+
+function fieldCandidates(action: string, rest: string[], current: string, scope: Scope): Candidate[] | undefined {
+	// quietStartup 只能写在全局：项目级的 set 不收它，也不给；unset 哪一份都收，项目级的不给。
+	const offered = scope === "global";
+	const named = (name: string) =>
+		fieldNamed(name) !== undefined || (name === QUIET && (offered || action === "unset"));
 	// 前面有执行时会被拒绝的词（不认识的字段、大小写不对的、没写 = 或值的），什么都不给。
 	const valid = (word: string) => {
-		if (action === "unset") return word === "enabled" || fieldNamed(word) !== undefined;
+		if (action === "unset") return word === "enabled" || named(word);
 		const equals = word.indexOf("=");
-		return equals > 0 && equals < word.length - 1 && fieldNamed(word.slice(0, equals)) !== undefined;
+		return equals > 0 && equals < word.length - 1 && named(word.slice(0, equals));
 	};
 	if (!rest.every(valid)) return undefined;
 	// 写过的字段不再给：再写一次，执行时会被拒绝。
-	const written = new Set(rest.map((word) => fieldNamed(word.split("=")[0])?.name));
+	const written = new Set(rest.map((word) => word.split("=")[0]));
 	const unwritten = FIELDS.filter((item) => !written.has(item.name));
+	const quiet = offered && !written.has(QUIET);
 	if (action === "unset") {
-		const toggle = rest.includes("enabled") ? [] : [{ value: "enabled", description: "开关：去掉之后继承下一层" }];
-		return [...toggle, ...unwritten.map((item) => ({ value: item.name, description: item.description }))];
+		const toggle = written.has("enabled") ? [] : [{ value: "enabled", description: "开关：去掉之后继承下一层" }];
+		return [
+			...toggle,
+			...unwritten.map((item) => ({ value: item.name, description: item.description })),
+			...(quiet ? [{ value: QUIET, description: "启动提示：去掉之后跟着 pi 的 quietStartup" }] : []),
+		];
 	}
 	const equals = current.indexOf("=");
 	if (equals < 0)
-		return unwritten.map((item) => ({ value: `${item.name}=`, description: `${item.syntax}：${item.description}` }));
-	const known = fieldNamed(current.slice(0, equals));
-	if (!known || written.has(known.name)) return undefined;
+		return [
+			...unwritten.map((item) => ({ value: `${item.name}=`, description: `${item.syntax}：${item.description}` })),
+			...(quiet ? [{ value: `${QUIET}=`, description: "true 或 false：启动时的提示显示不显示" }] : []),
+		];
+	const name = current.slice(0, equals);
+	if (written.has(name)) return undefined;
+	if (name === QUIET)
+		return quiet ? QUIET_CHOICES.map((choice) => ({ ...choice, value: `${QUIET}=${choice.value}` })) : undefined;
+	const known = fieldNamed(name);
+	if (!known) return undefined;
 	return (known.choices ?? []).map((choice) => ({
 		value: `${known.name}=${choice.value}`,
 		description: choice.description,

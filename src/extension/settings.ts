@@ -5,7 +5,7 @@
  * 项目级要等 `session_start` 才知道：pi 那时才定下当前目录。不看 pi 对项目的信任：有这个文件就读，和它旁边有没有
  * `.pi/settings.json` 无关。
  *
- * `rules` 只能手写；命令只改 `enabled` 和顶层的参数字段，改哪一份由 `--scope` 定，不写就是全局。每次写之前重读
+ * `rules` 只能手写；命令只改 `enabled`、`quietStartup` 和顶层的参数字段，改哪一份由 `--scope` 定，不写就是全局。每次写之前重读
  * 要改的那份，在它当前的内容上合并，免得盖掉加载之后才手改的内容；文件读不了（不是合法 JSON、顶层不是对象）
  * 时拒绝写，让用户自己修。
  */
@@ -53,8 +53,8 @@ export type Saved =
 	| { kind: "unbound" }
 	| { kind: "unwritten"; error: string };
 
-/** reset 去掉的键：开关和顶层的参数。 */
-export const COMMAND_KEYS: readonly string[] = ["enabled", ...FIELD_NAMES];
+/** 命令能改、reset 去掉的键：开关、顶层的参数和 quietStartup。 */
+export const COMMAND_KEYS: readonly string[] = ["enabled", ...FIELD_NAMES, "quietStartup"];
 
 const EMPTY: ConfigLayer = { defaults: {}, problems: [] };
 
@@ -120,7 +120,7 @@ export class Settings {
 		// 两份都重读：显示的状态和磁盘上的一致。
 		this.reload();
 		if (current.kind === "missing" && Object.keys(next).length === 0) return { kind: "saved", value: next };
-		this.loaded[scope] = { scope, path, source: { kind: "file" }, layer: parseLayer(next) };
+		this.loaded[scope] = { scope, path, source: { kind: "file" }, layer: parseLayer(next, scope === "project") };
 		this.remerge();
 		try {
 			writeJson(path, next);
@@ -130,7 +130,7 @@ export class Settings {
 		return { kind: "saved", value: next };
 	}
 
-	/** 去掉开关和顶层的参数，手写的 rules 和其他内容留着。 */
+	/** 去掉开关、顶层的参数和 quietStartup，手写的 rules 和其他内容留着。 */
 	reset(scope: Scope): Saved {
 		return this.update(scope, { unset: COMMAND_KEYS });
 	}
@@ -142,6 +142,7 @@ export class Settings {
 		const layer = this.loaded[scope]?.layer;
 		if (!layer) return false;
 		if (key === "enabled") return layer.enabled !== undefined;
+		if (key === "quietStartup") return layer.quietStartup !== undefined;
 		if (key === "rules") return layer.rules !== undefined;
 		return Object.hasOwn(layer.defaults, key);
 	}
@@ -164,7 +165,7 @@ function readFile(scope: Scope, path: string): SettingsFile {
 	const current = readJson(path);
 	switch (current.kind) {
 		case "ok":
-			return { scope, path, source: { kind: "file" }, layer: parseLayer(current.value) };
+			return { scope, path, source: { kind: "file" }, layer: parseLayer(current.value, scope === "project") };
 		case "missing":
 			return { scope, path, source: { kind: "none" }, layer: EMPTY };
 		case "broken":

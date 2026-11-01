@@ -11,32 +11,42 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const entries = manifest.pi.extensions.map((entry) => resolve(root, entry));
 const sdk = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
-const { loadExtensions } = await import(pathToFileURL(resolve(sdk, "core/extensions/loader.js")).href);
+const { createExtensionRuntime, loadExtensions } = await import(
+	pathToFileURL(resolve(sdk, "core/extensions/loader.js")).href
+);
 
-/** 加载一次入口，按 pi 的顺序先发 session_start，返回注册上的扩展和 `/onward status` 的回复。 */
-async function load(cwd) {
-	const result = await loadExtensions(entries, root);
+/**
+ * 加载一次入口，按 pi 的顺序先发 session_start，返回注册上的扩展、启动时的提示和 `/onward status` 的回复。
+ * `piSettings` 是 pi 自己的设置：扩展用 `pi.getSettings()` 读它。
+ */
+async function load(cwd, piSettings = {}) {
+	const runtime = { ...createExtensionRuntime(), getSettings: () => piSettings };
+	const result = await loadExtensions(entries, root, undefined, runtime);
 	assert.deepEqual(result.errors, []);
 	assert.equal(result.extensions.length, 1);
 	const [extension] = result.extensions;
 	const command = extension.commands.get("onward");
 	assert.ok(command, "the onward command is registered");
-	let text = "";
+	const notes = [];
 	const ctx = {
 		cwd,
 		hasUI: true,
-		ui: { notify: (message) => (text = message), addAutocompleteProvider: () => {} },
+		ui: { notify: (message) => notes.push(message), addAutocompleteProvider: () => {} },
 	};
 	for (const handler of extension.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
+	const startup = [...notes];
 	await command.handler("status", ctx);
-	return { extension, text };
+	return { extension, startup, text: notes.at(-1) };
 }
 
 // 全局在 pi 的目录里：`PI_CODING_AGENT_DIR` 和 pi 一样展开 `~`。项目级是当前目录下的 .pi/onward.json。
 const agentDir = `.pi-onward-check-${process.pid}`;
 const project = join(tmpdir(), `pi-onward-check-${process.pid}`, "repo");
 process.env.PI_CODING_AGENT_DIR = `~/${agentDir}`;
-const { extension, text } = await load(project);
+const { extension, startup, text } = await load(project);
+assert.deepEqual(startup, ["💤 onward：没有可用的规则，出错时不会自动续跑（/onward show 查看）"]);
+// pi 的 quietStartup 打开时不说：扩展从 pi.getSettings() 读到它。
+assert.deepEqual((await load(project, { quietStartup: "header" })).startup, []);
 assert.match(text, /^💤 onward：开，但没有可用的规则[\s\S]*做法 {2}发「继续」\n {2}上限 {2}最多 10 次/);
 assert.ok(text.includes(`  全局    ${join(homedir(), agentDir, "onward.json")}（还没有`), text);
 assert.ok(text.includes(`  项目级  ${join(project, ".pi", "onward.json")}（还没有`), text);
@@ -51,4 +61,4 @@ for (const event of [
 ])
 	assert.ok(extension.handlers.has(event), `${event} handler`);
 
-console.log("pi extension loaded: /onward status, lifecycle handlers, message renderer, settings paths");
+console.log("pi extension loaded: /onward status, lifecycle handlers, message renderer, settings paths, quietStartup");

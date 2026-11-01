@@ -16,7 +16,7 @@ export function install(pi: ExtensionAPI, paths: ConfigPaths): void {
 		settings.bind(ctx.cwd);
 		// reload 和切换会话时 pi 会清掉扩展装的补全，所以每次都装。
 		ctx.ui.addAutocompleteProvider(argumentTabCompletion);
-		const notice = startupNotice(settings);
+		const notice = startupNotice(settings, () => quietStartup(pi, settings));
 		if (notice) say(ctx, notice);
 	});
 	pi.on("agent_start", (_event, ctx) => onward.agentStart(ctx));
@@ -27,4 +27,12 @@ export function install(pi: ExtensionAPI, paths: ConfigPaths): void {
 
 	registerCommand(pi, settings, onward);
 	pi.registerMessageRenderer(CUSTOM_TYPE, renderContinue);
+}
+
+/** 启动时的提示收不收起：onward 自己的 quietStartup 写了就按它，没写跟着 pi 的，pi 的 true 和 "header" 都收起。 */
+function quietStartup(pi: ExtensionAPI, settings: Settings): boolean {
+	const own = settings.config.quietStartup;
+	if (own !== undefined) return own;
+	const fromPi = pi.getSettings().quietStartup;
+	return fromPi === true || fromPi === "header";
 }

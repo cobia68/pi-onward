@@ -21,6 +21,8 @@ import { findRule, parseRules, type Rule } from "./rules.ts";
 
 export interface Config {
 	enabled: boolean;
+	/** 启动时的提示显示不显示；只来自全局设置，没写时跟着 pi 的 quietStartup。 */
+	quietStartup?: boolean;
 	/** 顶层的参数：规则没写的字段用它。 */
 	defaults: PolicyPatch;
 	rules: Rule[];
@@ -28,26 +30,40 @@ export interface Config {
 	problems: string[];
 }
 
-export const CONFIG_KEYS: ReadonlySet<string> = new Set(["$schema", "enabled", "rules", ...FIELD_NAMES]);
+export const CONFIG_KEYS: ReadonlySet<string> = new Set([
+	"$schema",
+	"enabled",
+	"quietStartup",
+	"rules",
+	...FIELD_NAMES,
+]);
 
 /** 一份设置文件读出来的内容：只有写了的字段。 */
 export interface ConfigLayer {
 	enabled?: boolean;
+	quietStartup?: boolean;
 	defaults: PolicyPatch;
 	/** 写了 `rules` 才有，空数组也算写了：合并时整份替换前面的。 */
 	rules?: Rule[];
 	problems: string[];
 }
 
-/** `raw` 是一份设置文件的内容。不抛，读不懂的记进 problems。 */
-export function parseLayer(raw: Record<string, unknown>): ConfigLayer {
+/**
+ * `raw` 是一份设置文件的内容。不抛，读不懂的记进 problems。`project`：这是项目级的一份，不能写 quietStartup：
+ * 不然别人仓库里的设置能关掉「用上了项目级设置」这句提醒。
+ */
+export function parseLayer(raw: Record<string, unknown>, project = false): ConfigLayer {
 	const problems: string[] = [];
 	if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") problems.push("enabled 需要 true 或 false");
+	const quiet = raw.quietStartup;
+	if (quiet !== undefined && project) problems.push("quietStartup 只能写在全局设置");
+	else if (quiet !== undefined && typeof quiet !== "boolean") problems.push("quietStartup 需要 true 或 false");
 	const defaults = readParams(raw, "", problems);
 	for (const key of Object.keys(raw)) if (!CONFIG_KEYS.has(key)) problems.push(`${key} 不认识`);
 	const rules = raw.rules === undefined ? undefined : parseRules(raw.rules, problems);
 	return {
 		...(typeof raw.enabled === "boolean" && { enabled: raw.enabled }),
+		...(!project && typeof quiet === "boolean" && { quietStartup: quiet }),
 		defaults,
 		...(rules && { rules }),
 		problems,
@@ -57,16 +73,18 @@ export function parseLayer(raw: Record<string, unknown>): ConfigLayer {
 /** 后面的层覆盖前面的：顶层字段逐个覆盖，`rules` 整份替换；问题都留着，任何一层有问题整份设置都不生效。 */
 export function mergeLayers(layers: readonly ConfigLayer[]): Config {
 	let enabled = true;
+	let quietStartup: boolean | undefined;
 	let defaults: PolicyPatch = {};
 	let rules: Rule[] = [];
 	const problems: string[] = [];
 	for (const layer of layers) {
 		if (layer.enabled !== undefined) enabled = layer.enabled;
+		if (layer.quietStartup !== undefined) quietStartup = layer.quietStartup;
 		defaults = { ...defaults, ...layer.defaults };
 		if (layer.rules) rules = layer.rules;
 		problems.push(...layer.problems);
 	}
-	return { enabled, defaults, rules, problems };
+	return { enabled, ...(quietStartup !== undefined && { quietStartup }), defaults, rules, problems };
 }
 
 /** 开着，并且设置里没有读不懂的内容。 */
@@ -74,9 +92,9 @@ export function isActive(config: Config): boolean {
 	return config.enabled && config.problems.length === 0;
 }
 
-/** 写回设置文件时的键顺序：`$schema`、`enabled`、参数、其他、`rules`。 */
+/** 写回设置文件时的键顺序：`$schema`、`enabled`、参数、`quietStartup`、其他、`rules`。 */
 export function fileOrder(raw: Record<string, unknown>): Record<string, unknown> {
-	const first = ["$schema", "enabled", ...FIELD_NAMES];
+	const first = ["$schema", "enabled", ...FIELD_NAMES, "quietStartup"];
 	const keys = [
 		...first.filter((key) => key in raw),
 		...Object.keys(raw).filter((key) => !first.includes(key) && key !== "rules"),

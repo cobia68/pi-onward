@@ -43,6 +43,11 @@ export function configSchema(): Record<string, unknown> {
 			$schema: { description: "这份 JSON Schema 的地址，给编辑器用", type: "string" },
 			enabled: { description: "插件开关", type: "boolean", default: true },
 			...Object.fromEntries(FIELDS.map((item) => [item.name, param(item, fileValue(item.name))])),
+			quietStartup: {
+				description:
+					"启动时的提示（用上了项目级设置、没有可用的规则）：true 不显示，false 照常显示，不写时跟着 pi 的 quietStartup；设置有问题时照样警告。只能写在全局设置",
+				type: "boolean",
+			},
 			rules: {
 				description: "按顺序第一条命中的生效；没命中的错误和空回复不处理",
 				type: "array",

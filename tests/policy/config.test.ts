@@ -49,11 +49,30 @@ test("命中：开着、是失败、有规则命中；参数是顶层叠上规�
 	assert.equal(matchFailure({ ...config, enabled: false }, err()), undefined);
 });
 
-test("写回时的键顺序：$schema、enabled、参数、其他、rules", () => {
+test("写回时的键顺序：$schema、enabled、参数、quietStartup、其他、rules", () => {
 	assert.deepEqual(
-		Object.keys(fileOrder({ rules: [], note: 1, delay: "1s", enabled: true, action: "stop", $schema: "s" })),
-		["$schema", "enabled", "action", "delay", "note", "rules"],
+		Object.keys(
+			fileOrder({
+				rules: [],
+				note: 1,
+				quietStartup: true,
+				delay: "1s",
+				enabled: true,
+				action: "stop",
+				$schema: "s",
+			}),
+		),
+		["$schema", "enabled", "action", "delay", "quietStartup", "note", "rules"],
 	);
+});
+
+test("quietStartup：只认 true、false；项目级的一份不能写，写了算一处问题，也不进合并", () => {
+	assert.deepEqual(parseLayer({ quietStartup: true }), { quietStartup: true, defaults: {}, problems: [] });
+	assert.deepEqual(parseLayer({ quietStartup: "header" }).problems, ["quietStartup 需要 true 或 false"]);
+	const project = parseLayer({ quietStartup: false, maxRetries: 2 }, true);
+	assert.deepEqual(project, { defaults: { maxRetries: 2 }, problems: ["quietStartup 只能写在全局设置"] });
+	assert.equal(mergeLayers([parseLayer({ quietStartup: true }), project]).quietStartup, true);
+	assert.equal("quietStartup" in mergeLayers([parseLayer({})]), false, "都没写：跟着 pi 的");
 });
 
 test("一份文件读成一层：只有写了的字段；rules 写了才有，空数组也算写了", () => {

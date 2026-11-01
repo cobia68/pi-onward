@@ -274,7 +274,7 @@ test("set 全有或全无：任何一项不对就一项都不改，问题一起�
 	assert.equal(bad.kind, "error");
 	assert.match(
 		(bad as { message: string }).message,
-		/^maxRetries 需要 1–50 的整数；delay 写成 .*；不认识的字段 colour；可用 action、prompt、maxRetries、maxSameError、delay。未做任何修改$/,
+		/^maxRetries 需要 1–50 的整数；delay 写成 .*；不认识的字段 colour；可用 action、prompt、maxRetries、maxSameError、delay、quietStartup。未做任何修改$/,
 	);
 	for (const text of [
 		"set",
@@ -304,7 +304,7 @@ test("set 全有或全无：任何一项不对就一项都不改，问题一起�
 		assert.equal(parseCommand(text).kind, "error", text);
 	assert.match(
 		(parseCommand("unset colour") as { message: string }).message,
-		/^不认识的字段 colour；可用 enabled、action、prompt、maxRetries、maxSameError、delay。未做任何修改$/,
+		/^不认识的字段 colour；可用 enabled、action、prompt、maxRetries、maxSameError、delay、quietStartup。未做任何修改$/,
 	);
 });
 
@@ -332,6 +332,7 @@ test("补全：动作、字段名、action 的取值；后面还能写的补一�
 		"set maxRetries=",
 		"set maxSameError=",
 		"set delay=",
+		"set quietStartup=",
 		"set --help",
 	]);
 	assert.deepEqual(values("set action="), ["set action=message ", "set action=resend ", "set action=stop "]);
@@ -342,6 +343,7 @@ test("补全：动作、字段名、action 的取值；后面还能写的补一�
 		"unset delay prompt ",
 		"unset delay maxRetries ",
 		"unset delay maxSameError ",
+		"unset delay quietStartup ",
 		"unset delay --help",
 	]);
 	assert.deepEqual(values("show "), ["show rules ", "show --help"]);
@@ -385,8 +387,8 @@ test("补全：每个动作后面都给 --help；写了 --help 就什么都不�
 	}
 	assert.deepEqual(values("show rules "), ["show rules --help"]);
 	assert.deepEqual(values("set --"), ["set --help"]);
-	assert.deepEqual(values("unset enabled action prompt maxRetries maxSameError delay "), [
-		"unset enabled action prompt maxRetries maxSameError delay --help",
+	assert.deepEqual(values("unset enabled action prompt maxRetries maxSameError delay quietStartup "), [
+		"unset enabled action prompt maxRetries maxSameError delay quietStartup --help",
 	]);
 	for (const text of [
 		"--help",
@@ -450,6 +452,7 @@ test("补全：写过的字段不再给；大小写不对的不补", () => {
 		"set action=resend maxRetries=",
 		"set action=resend maxSameError=",
 		"set action=resend delay=",
+		"set action=resend quietStartup=",
 		"set action=resend --help",
 	]);
 	assert.deepEqual(values("unset delay "), [
@@ -458,6 +461,7 @@ test("补全：写过的字段不再给；大小写不对的不补", () => {
 		"unset delay prompt ",
 		"unset delay maxRetries ",
 		"unset delay maxSameError ",
+		"unset delay quietStartup ",
 		"unset delay --help",
 	]);
 	for (const text of [

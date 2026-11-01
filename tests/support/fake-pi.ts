@@ -1,4 +1,4 @@
-/** 假的 pi：只实现扩展用到的 on / registerCommand / ctx.ui，按真实顺序发事件。 */
+/** 假的 pi：只实现扩展用到的 on / registerCommand / getSettings / ctx.ui，按真实顺序发事件。 */
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -105,7 +105,10 @@ export interface Harness {
 
 let sessions = 0;
 
-/** `config` 是全局设置的内容，`project` 是当前目录下 .pi/onward.json 的内容；字符串原样写进去。 */
+/**
+ * `config` 是全局设置的内容，`project` 是当前目录下 .pi/onward.json 的内容；字符串原样写进去。`piSettings` 是 pi 自己的
+ * 设置，`pi.getSettings()` 返回它。
+ */
 export function harness(
 	options: {
 		configPath?: string;
@@ -114,9 +117,10 @@ export function harness(
 		cwd?: string;
 		copies?: number;
 		ui?: boolean;
+		piSettings?: Record<string, unknown>;
 	} = {},
 ): Harness {
-	const { config, project, copies = 1, ui = true } = options;
+	const { config, project, copies = 1, ui = true, piSettings = {} } = options;
 	const statuses = new Map<string, string>();
 	let statusWrites = 0;
 	const handlers = new Map<string, Handler[]>();
@@ -170,6 +174,7 @@ export function harness(
 		registerMessageRenderer(customType: string, renderer: unknown) {
 			renderers.set(customType, renderer);
 		},
+		getSettings: () => structuredClone(piSettings),
 	};
 	const configPath =
 		options.configPath ?? (config === undefined ? join(tempDir(), "onward.json") : writeConfig(config));
