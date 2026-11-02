@@ -1,6 +1,6 @@
 {
   "name": "@cobia/pi-onward",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "pi 出错或空回停止时，按规则自动续跑",
   "keywords": [
     "pi",

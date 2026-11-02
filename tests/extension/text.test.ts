@@ -29,8 +29,8 @@ test("规则：每条一块，条件、做法、上限、间隔各一行；stop 
 	const text = describeRules(
 		parseConfig({
 			rules: [
-				{ name: "auth", when: { error: "401", provider: "welfare-*" }, action: "resend", maxRetries: 20 },
-				{ name: "quota", when: { error: "quota" }, action: "stop", enabled: false },
+				{ name: "auth", when: { failure: "401", provider: "welfare-*" }, action: "resend", maxRetries: 20 },
+				{ name: "quota", when: { failure: "quota" }, action: "stop", enabled: false },
 			],
 		}),
 	);
@@ -39,22 +39,22 @@ test("规则：每条一块，条件、做法、上限、间隔各一行；stop 
 		[
 			"规则（按顺序，第一条命中的生效；没命中的错误和空回复不处理）",
 			"1. auth",
-			"   条件  错误匹配 /401/i，provider=welfare-*",
+			"   条件  失败匹配 /401/i，provider=welfare-*",
 			"   做法  静默重发同一个请求",
 			"   上限  最多 20 次；同一个错误连续 10 次后也停",
 			"   间隔  3 → 6 → 9 → 12 → 15 秒，之后每次 15 秒；20 次合计约 4 分 30 秒",
 			"2. quota（已停用）",
-			"   条件  错误匹配 /quota/i",
+			"   条件  失败匹配 /quota/i",
 			"   做法  命中就停，只提醒，不续跑",
 		].join("\n"),
 	);
 });
 
-test("规则：when.empty 的条件写成「空回复」", () => {
+test("规则：空回复也显示 failure 正则，不使用单独的条件格式", () => {
 	const text = describeRules(
-		parseConfig({ rules: [{ name: "empty", when: { empty: true, provider: "welfare-*" } }] }),
+		parseConfig({ rules: [{ name: "empty", when: { failure: "^$", provider: "welfare-*" } }] }),
 	);
-	assert.match(text, /\n1\. empty\n {3}条件 {2}空回复，provider=welfare-\*\n/);
+	assert.match(text, /\n1\. empty\n {3}条件 {2}失败匹配 \/\^\$\/i，provider=welfare-\*\n/);
 });
 
 test("规则：没有时说怎么加；有问题时只列问题", () => {
@@ -63,7 +63,7 @@ test("规则：没有时说怎么加；有问题时只列问题", () => {
 		/^没有可用的规则，出错时不会自动续跑。在设置文件的 rules 里写规则/,
 	);
 	assert.equal(
-		describeRules(parseConfig({ rules: [{ name: "auth", when: { error: "401" } }, { when: { x: 1 } }] })),
+		describeRules(parseConfig({ rules: [{ name: "auth", when: { failure: "401" } }, { when: { x: 1 } }] })),
 		"设置文件有 1 处问题，修好之前不会自动续跑：\n- rules[1]（rule-2）.when.x 不认识\n改完 /onward reload",
 	);
 });

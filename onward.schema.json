@@ -115,16 +115,12 @@
       }
     },
     "when": {
-      "description": "命中条件，几项都要满足；不写 when 的规则管所有错误，不管空回复",
+      "description": "命中条件，几项都要满足；不写 failure 就不限制失败类型",
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "empty": {
-          "description": "只管空回复，不管出错；不能和 error 一起写",
-          "const": true
-        },
-        "error": {
-          "description": "正则，大小写不敏感，对原始错误文案匹配",
+        "failure": {
+          "description": "非空正则，大小写不敏感；普通错误匹配原始文案，缺少文案时匹配「未知错误」，空回复匹配空串。^$ 匹配空回复，.+ 匹配普通错误，.* 匹配所有失败",
           "type": "string",
           "minLength": 1
         },
@@ -137,13 +133,6 @@
           "description": "通配，只有 * 有特殊含义，大小写不敏感，整串匹配",
           "type": "string",
           "pattern": "\\S"
-        }
-      },
-      "dependentSchemas": {
-        "empty": {
-          "properties": {
-            "error": false
-          }
         }
       }
     }

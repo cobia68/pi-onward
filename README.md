@@ -27,7 +27,7 @@ pi install npm:@cobia/pi-onward
 
 ## ⚙️ 工作方式
 
-一轮收尾时，最后一条助手消息是 `stopReason: "error"`、并且命中了一条规则，才处理；空回复（`stopReason: "stop"`，但没有文字也没有工具调用）要有 `"when": { "empty": true }` 的规则才处理。按 Esc 结束的（`aborted`）、正常结束且有内容的、没命中规则的都不碰。下面的动作、上限、间隔都是参数：设置文件顶层写的是默认值，规则里同名的字段覆盖它。
+一轮收尾时，最后一条助手消息明确报错（`stopReason: "error"`），或正常结束但没有非空文字、也没有工具调用（空回复），都算失败。只有命中规则才处理；按 Esc 结束的（`aborted`）、正常结束且有内容的、没命中规则的都不碰。下面的动作、上限、间隔都是参数：设置文件顶层写的是默认值，规则里同名的字段覆盖它。
 
 续跑都在 pi 的收尾边界 `agent_before_settle` 上等一会儿，再用 `continue: true` 让这一轮接着跑。等待和续跑都在这一轮之内，所以交互、`pi -p`、RPC、[subagent 子会话](#-常见问题)里行为一样。
 
@@ -76,7 +76,7 @@ pi install npm:@cobia/pi-onward
     {
       "name": "relay-auth",
       "when": {
-        "error": "401|invalid\\s*(api\\s*)?(key|token)",
+        "failure": "401|invalid\\s*(api\\s*)?(key|token)",
         "provider": "welfare-*"
       },
       "action": "resend",
@@ -85,7 +85,7 @@ pi install npm:@cobia/pi-onward
     },
     {
       "name": "everything-else",
-      "prompt": "上一步出错了（{error}），接着做，第 {attempt}/{max} 次"
+      "prompt": "上一步失败了（{error}），接着做，第 {attempt}/{max} 次"
     }
   ]
 }
@@ -96,8 +96,8 @@ pi install npm:@cobia/pi-onward
 一条规则由条件 `when` 和参数组成，参数的名字和顶层一样。
 
 - **没有内置规则**。没写 `rules`，出错时什么都不做。顶层的参数只是规则没写时的默认值，本身不会触发续跑。
-- 按顺序第一条命中的生效，**没命中的错误不处理**。想兜底就在最后放一条不带 `when` 的规则。
-- 不带 `when` 的兜底只管出错，不管空回复；空回复要单独写一条 `"when": { "empty": true }` 的规则。
+- 按顺序第一条命中的生效，**没命中的失败不处理**。想兜底就在最后放一条不带 `when` 的规则。
+- 不写 `when.failure` 就不限制失败类型，不带 `when` 或写成 `"when": {}` 的兜底也会处理空回复。
 - `"action": "stop"` 的规则命中就停、只提醒，也挡住后面的兜底。适合额度用完这类重试没用的错误。
 - `enabled: false` 的规则保留但跳过。
 - 每条规则有自己的续跑次数；「同一个错误连续几次」不分规则，但用的是当前命中规则的上限。
@@ -106,12 +106,23 @@ pi install npm:@cobia/pi-onward
 | :-------------------------------------------------------- | :---------------------------------------------------------------- |
 | `name`                                                    | 规则名，出现在通知里，不能重名；不写时按位置叫 `rule-1`、`rule-2` |
 | `enabled`                                                 | `false` 时保留但跳过                                              |
-| `when.empty`                                              | 写 `true` 时只管空回复，不管出错；不能和 `when.error` 一起写      |
-| `when.error`                                              | 正则，大小写不敏感，对原始错误文案匹配                            |
+| `when.failure` | 非空正则字符串，大小写不敏感，匹配失败文本 |
 | `when.provider` / `when.model`                            | 通配，只有 `*` 有特殊含义，大小写不敏感，整串匹配                 |
 | `action`、`prompt`、`maxRetries`、`maxSameError`、`delay` | 覆盖顶层的同名字段                                                |
 
-`prompt` 里可以写 `{attempt}`（第几次）、`{max}`（最多几次）、`{error}`（错误摘要，空回复时是「空回复」）、`{rule}`（规则名）。
+失败文本：普通错误用原始错误文案，没有有效文案时用「未知错误」；空回复用空字符串。所有 `failure` 都走同一套正则匹配：
+
+| `when.failure` | 匹配范围 |
+| :-- | :-- |
+| `"^$"` | 空回复 |
+| `"401\|unauthorized"` | 对应错误文案 |
+| `"401\|^$"` | 401 错误或空回复 |
+| `".+"` | 所有普通错误，不含空回复 |
+| `".*"` | 所有失败，包括空回复 |
+
+不能写空正则 `""`：它会匹配所有字符串，容易意外变成兜底；匹配空回复写 `^$`，匹配全部写 `.*`
+
+`prompt` 里可以写 `{attempt}`（第几次）、`{max}`（最多几次）、`{error}`（失败摘要，空回复时是「空回复」）、`{rule}`（规则名）。
 
 **设置文件里有读不懂的地方，整份不生效**，修好之前不会自动续跑，启动时和 `/onward status` 都会提醒。拼错或不认识的键、超出范围的值、不是 `true` / `false` 的 `enabled`、重名的规则都算。不会只丢掉写坏的那部分、其余照跑：那样错误会落到更宽的规则或默认值上，比如写坏了的 `stop` 规则让额度错误落到兜底去续跑，多发真实请求。问题用 `/onward show` 查看，改完 `/onward reload`。设置文件不是合法 JSON、或者顶层不是对象时也一样；这时命令不会改写它，回复「未做任何修改」。有项目级设置时，两份里任何一份这样，都是整份不生效。
 
@@ -144,21 +155,21 @@ pi install npm:@cobia/pi-onward
     {
       "name": "quota",
       "when": {
-        "error": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|usage limit|余额不足|额度不足|额度已用尽"
+        "failure": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|usage limit|余额不足|额度不足|额度已用尽"
       },
       "action": "stop"
     },
     {
       "name": "context-overflow",
       "when": {
-        "error": "context[\\s_-]*(length|window)|prompt (is )?too long|maximum context|request_too_large"
+        "failure": "context[\\s_-]*(length|window)|prompt (is )?too long|maximum context|request_too_large"
       },
       "action": "stop"
     },
     {
       "name": "auth",
       "when": {
-        "error": "\\b401\\b|unauthorized|authentication|invalid[\\s_-]*(x-)?(api[\\s_-]*)?(key|token)"
+        "failure": "\\b401\\b|unauthorized|authentication|invalid[\\s_-]*(x-)?(api[\\s_-]*)?(key|token)"
       },
       "action": "resend",
       "maxRetries": 20,
@@ -167,7 +178,7 @@ pi install npm:@cobia/pi-onward
     {
       "name": "rate-limit",
       "when": {
-        "error": "\\b429\\b|rate[\\s_-]*limit|too many requests|resource[\\s_-]*exhausted"
+        "failure": "\\b429\\b|rate[\\s_-]*limit|too many requests|resource[\\s_-]*exhausted"
       },
       "action": "resend",
       "maxRetries": 5,
@@ -176,21 +187,21 @@ pi install npm:@cobia/pi-onward
     {
       "name": "server",
       "when": {
-        "error": "\\b(500|502|503|504|520|524|529)\\b|overloaded|server[\\s_-]*error|internal[\\s_-]*error|bad gateway|service[\\s_-]*unavailable|upstream|负载已饱和"
+        "failure": "\\b(500|502|503|504|520|524|529)\\b|overloaded|server[\\s_-]*error|internal[\\s_-]*error|bad gateway|service[\\s_-]*unavailable|upstream|负载已饱和"
       },
       "action": "resend"
     },
     {
       "name": "network",
       "when": {
-        "error": "connection|network|econnreset|econnrefused|etimedout|socket hang up|fetch failed|timed? ?out|terminated"
+        "failure": "connection|network|econnreset|econnrefused|etimedout|socket hang up|fetch failed|timed? ?out|terminated"
       },
       "action": "resend"
     },
     {
       "name": "empty",
       "when": {
-        "empty": true
+        "failure": "^$"
       },
       "action": "message",
       "maxRetries": 3
@@ -198,7 +209,7 @@ pi install npm:@cobia/pi-onward
     {
       "name": "fallback",
       "action": "message",
-      "prompt": "上一步出错了（{error}），接着做",
+      "prompt": "上一步失败了（{error}），接着做",
       "maxRetries": 3,
       "maxSameError": 2
     }
@@ -215,10 +226,10 @@ pi install npm:@cobia/pi-onward
 | `server`           | `5xx`、`overloaded`、上游负载饱和                                            | 静默重发，默认间隔                                                                               |
 | `network`          | `Connection error.`、`ECONNRESET`、超时、`fetch failed`                      | 静默重发，默认间隔                                                                               |
 | `empty`            | 空回复：正常结束，但没有文字也没有工具调用。中转偶尔这样返回                 | 发「继续」让模型接着做；原样重发通常还是空的。最多 3 次                                          |
-| `fallback`         | 上面都没命中的错误                                                           | 发一条带错误摘要的消息，让模型自己接着做；最多 3 次，同一个错误连续超过 2 次就停。不想兜底就删掉 |
+| `fallback`         | 上面都没命中的失败（包括空回复）                                                           | 发一条带失败摘要的消息，让模型自己接着做；最多 3 次，同一个错误连续超过 2 次就停。不想兜底就删掉 |
 
 - 只想对某个中转生效：在 `when` 里加 `"provider": "你的中转-*"`（只有 `*` 是通配）。
-- 各家的错误文案不一样。没命中的话，看 pi 显示的错误原文，补进对应规则的 `when.error`。它对原始错误文案匹配，大小写不敏感，JSON 里的反斜杠要写两遍。
+- 各家的错误文案不一样。没命中的话，看 pi 显示的错误原文，补进对应规则的 `when.failure`。它对原始错误文案匹配，大小写不敏感，JSON 里的反斜杠要写两遍。
 
 ## 🧰 命令速查
 

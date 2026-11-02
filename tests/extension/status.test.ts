@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { err, harness, ok } from "../support/fake-pi.ts";
 
-const fast = (params: Record<string, unknown> = {}, rules: unknown[] = [{ name: "any" }]) => ({
+const fast = (params: Record<string, unknown> = {}, rules: unknown[] = [{ name: "any", action: "message" }]) => ({
 	config: { delay: "0s", ...params, rules },
 });
 
@@ -27,7 +27,7 @@ test("次数用完：写续跑已停，这一轮结束也留着，用户发新�
 });
 
 test("action=stop 的规则：写不续跑", async () => {
-	const h = harness(fast({}, [{ name: "quota", when: { error: "quota" }, action: "stop" }]));
+	const h = harness(fast({}, [{ name: "quota", when: { failure: "quota" }, action: "stop" }]));
 	await h.boundary(err("429 insufficient_quota"));
 	assert.equal(h.status(), "🛑 不续跑 · quota");
 });
@@ -57,7 +57,7 @@ test("没有界面时不写状态栏；没续跑过也不去清", async () => {
 });
 
 test("会话里的提示不重复状态栏：不带图标、次数和规则名，只说接下来做什么、为什么停", async () => {
-	const h = harness(fast({ maxRetries: 1 }, [{ name: "auth" }]));
+	const h = harness(fast({ maxRetries: 1 }, [{ name: "auth", action: "message" }]));
 	await h.boundary(err());
 	assert.equal(h.status(), "⏩ 续跑 1/1 · auth");
 	assert.equal(h.notes.at(-1)![1], "onward：0 毫秒后发「继续」");

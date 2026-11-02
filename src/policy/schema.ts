@@ -3,7 +3,7 @@
  * 收下的写法一致。生成的文件是仓库根目录的 onward.schema.json：`npm run gen:schema` 重新生成，测试检查它没有过期。
  *
  * Schema 只管写法，而且不拒绝读设置时收下的：正则对不对、重名的规则、封顶小于起步这类问题，仍由 config.ts
- * 记成问题。`error` 不写 `format: "regex"`：校验器按 `u` 模式检查，会拒绝读设置时收下的写法，如 `[\w-.]`。
+ * 记成问题。`failure` 不写 `format: "regex"`：校验器按 `u` 模式检查，会拒绝读设置时收下的写法，如 `[\w-.]`。
  */
 import { delayText } from "./delay.ts";
 import { DEFAULT_POLICY, FIELDS, type Field } from "./policy.ts";
@@ -70,13 +70,13 @@ export function configSchema(): Record<string, unknown> {
 				},
 			},
 			when: {
-				description: "命中条件，几项都要满足；不写 when 的规则管所有错误，不管空回复",
+				description: "命中条件，几项都要满足；不写 failure 就不限制失败类型",
 				type: "object",
 				additionalProperties: false,
 				properties: {
-					empty: { description: "只管空回复，不管出错；不能和 error 一起写", const: true },
-					error: {
-						description: "正则，大小写不敏感，对原始错误文案匹配",
+					failure: {
+						description:
+							"非空正则，大小写不敏感；普通错误匹配原始文案，缺少文案时匹配「未知错误」，空回复匹配空串。^$ 匹配空回复，.+ 匹配普通错误，.* 匹配所有失败",
 						type: "string",
 						minLength: 1,
 					},
@@ -91,8 +91,6 @@ export function configSchema(): Record<string, unknown> {
 						pattern: "\\S",
 					},
 				},
-				// 写了 empty 就不能写 error：编辑器把问题标在 error 上。
-				dependentSchemas: { empty: { properties: { error: false } } },
 			},
 		},
 	};

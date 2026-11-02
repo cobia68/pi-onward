@@ -5,7 +5,7 @@
  * {
  *   "enabled": true,
  *   "action": "message", "maxRetries": 10,
- *   "rules": [{ "name": "auth", "when": { "error": "401" }, "action": "resend", "maxRetries": 20 }]
+ *   "rules": [{ "name": "auth", "when": { "failure": "401" }, "action": "resend", "maxRetries": 20 }]
  * }
  * ```
  *

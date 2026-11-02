@@ -1,17 +1,15 @@
 /**
  * 规则 = 条件（when）+ 参数，按顺序第一条命中的生效。参数和设置文件顶层同名，只写和顶层不同的。
- * 没写 `when.empty` 的规则管出错，写了的只管空回复；不带 when 的兜底因此不会碰空回复。
- * 没有内置规则：没写或没命中，都不处理。读不懂的内容只记问题，不替用户猜；有问题时整份设置不生效（见 config.ts）。
+ * when.failure 统一用正则匹配失败文本：普通错误用原文，空回复用空串；不写就不限制失败类型。
+ * 没有内置规则：没写或没命中，都不处理。读不懂的内容让整份设置不生效（见 config.ts）。
  */
 import { errorText, isRecord } from "../util.ts";
-import type { Failure } from "./failure.ts";
+import { type Failure, failureText } from "./failure.ts";
 import { FIELD_NAMES, type PolicyPatch, readParams } from "./policy.ts";
 
 export interface RuleWhen {
-	/** 只管空回复；只能是 true，不写就是管出错。 */
-	empty?: true;
-	/** 大小写不敏感，对原始错误文案匹配；读设置时编译一次。 */
-	error?: RegExp;
+	/** 大小写不敏感，对统一的失败文本匹配；读设置时编译一次。 */
+	failure?: RegExp;
 	/** 通配，只有 `*` 有特殊含义。 */
 	provider?: string;
 	model?: string;
@@ -32,8 +30,7 @@ export function findRule(rules: readonly Rule[], failure: Failure): Rule | undef
 }
 
 function matches(when: RuleWhen, failure: Failure): boolean {
-	if ((when.empty === true) !== (failure.stopReason === "stop")) return false;
-	if (when.error !== undefined && !when.error.test(failure.errorMessage ?? "")) return false;
+	if (when.failure !== undefined && !when.failure.test(failureText(failure))) return false;
 	if (when.provider !== undefined && !glob(when.provider, failure.provider)) return false;
 	if (when.model !== undefined && !glob(when.model, failure.model)) return false;
 	return true;
@@ -101,19 +98,15 @@ function parseWhen(raw: unknown, where: string, problems: string[]): RuleWhen {
 	}
 	for (const [key, value] of Object.entries(raw)) {
 		switch (key) {
-			case "empty":
-				if (value === true) when.empty = true;
-				else problems.push(`${where}.empty 只能是 true；不写就是管出错`);
-				break;
-			case "error":
+			case "failure":
 				if (typeof value !== "string" || !value) {
-					problems.push(`${where}.error 需要非空正则字符串`);
+					problems.push(`${where}.failure 需要非空正则字符串；空回复用 ^$，所有失败用 .*`);
 					break;
 				}
 				try {
-					when.error = new RegExp(value, "i");
+					when.failure = new RegExp(value, "i");
 				} catch (error: unknown) {
-					problems.push(`${where}.error 不是合法正则（${errorText(error)}）`);
+					problems.push(`${where}.failure 不是合法正则（${errorText(error)}）`);
 				}
 				break;
 			case "provider":
@@ -125,7 +118,5 @@ function parseWhen(raw: unknown, where: string, problems: string[]): RuleWhen {
 				problems.push(`${where}.${key} 不认识`);
 		}
 	}
-	if (raw.empty === true && raw.error !== undefined)
-		problems.push(`${where} 里 empty 和 error 不能一起写：空回复没有错误文案`);
 	return when;
 }

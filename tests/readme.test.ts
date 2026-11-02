@@ -50,6 +50,9 @@ test("README 常见规则：可直接使用，常见错误各归其位", () => {
 	assert.equal(blank?.rule.name, "empty", "空回复");
 	assert.equal(blank?.policy.action, "message");
 	assert.equal(blank?.policy.prompt, "继续");
+	assert.equal(hit("")?.rule.name, "fallback", "普通错误缺少文案不落到空回复规则");
+	const withoutEmptyRule = { ...config, rules: config.rules.filter((rule) => rule.name !== "empty") };
+	assert.equal(matchFailure(withoutEmptyRule, empty())?.rule.name, "fallback", "失败兜底也匹配空回复");
 });
 
 test("example.json：解析无问题，顶层参数就是内置默认值，rules 与 README 一致", () => {
@@ -58,4 +61,10 @@ test("example.json：解析无问题，顶层参数就是内置默认值，rules
 	assert.deepEqual(config.problems, []);
 	assert.deepEqual(config.defaults, { ...DEFAULT_POLICY });
 	assert.deepEqual(example.rules, commonRules().rules);
+	for (const rule of example.rules) {
+		if (rule.when) {
+			assert.equal(typeof rule.when.failure, "string", rule.name);
+			assert.equal("error" in rule.when || "empty" in rule.when, false, rule.name);
+		}
+	}
 });

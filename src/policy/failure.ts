@@ -31,6 +31,13 @@ export function isFailure(message: AgentMessage | undefined): message is Failure
 	return isError(message) || isEmptyReply(message);
 }
 
+/** 匹配用的失败文本，不是展示摘要：空回复用空串；普通错误缺少有效文案时用非空占位，其他原文不动。 */
+export function failureText(failure: Failure): string {
+	if (failure.stopReason === "stop") return "";
+	const text = failure.errorMessage ?? "";
+	return text.trim() ? text : UNKNOWN_ERROR;
+}
+
 const SUCCESS: ReadonlySet<AssistantMessage["stopReason"]> = new Set(["stop", "length", "toolUse", "deferred"]);
 
 /** 助手正常返回了一次（包括中间的工具轮），说明已经恢复。空回复不算。 */
@@ -55,8 +62,10 @@ export function normalizeError(text: string): string {
 
 export function errorSignature(failure: Failure): string {
 	if (failure.stopReason === "stop") return EMPTY_REPLY;
-	return normalizeError(failure.errorMessage ?? "") || "未知错误";
+	return normalizeError(failure.errorMessage ?? "") || UNKNOWN_ERROR;
 }
+
+const UNKNOWN_ERROR = "未知错误";
 
 /** 空回复的「错误摘要」：提示词里的 {error}、同错计数都用它。 */
 export const EMPTY_REPLY = "空回复";

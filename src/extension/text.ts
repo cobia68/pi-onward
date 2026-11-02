@@ -377,12 +377,11 @@ export function describeRules(config: Config, from?: string): string {
 
 function describeWhen({ when }: Rule): string {
 	const parts = [
-		when.empty && "空回复",
-		when.error && `错误匹配 /${when.error.source}/i`,
+		when.failure && `失败匹配 /${when.failure.source}/i`,
 		when.provider && `provider=${when.provider}`,
 		when.model && `model=${when.model}`,
 	].filter(Boolean);
-	return parts.length ? parts.join("，") : "任何错误";
+	return parts.length ? parts.join("，") : "任何失败";
 }
 
 /** 文件读不了，或者内容有读不懂的地方：读不了也记成一处问题。 */

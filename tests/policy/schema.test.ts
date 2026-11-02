@@ -20,20 +20,27 @@ test("提交的 onward.schema.json 就是字段表生成的；过期了运行 np
 test("键和读设置时认的一样：顶层、规则、条件都不多不少", () => {
 	assert.deepEqual(Object.keys(schema.properties).sort(), [...CONFIG_KEYS].sort());
 	assert.deepEqual(Object.keys(schema.$defs.rule.properties).sort(), [...RULE_KEYS].sort());
+	assert.deepEqual(Object.keys(schema.$defs.when.properties).sort(), ["failure", "model", "provider"]);
 	for (const key of Object.keys(schema.$defs.when.properties)) {
-		const problems = parseLayer({ rules: [{ when: { [key]: key === "empty" ? true : "x" } }] }).problems;
+		const problems = parseLayer({ rules: [{ when: { [key]: "x" } }] }).problems;
 		assert.deepEqual(problems, [], key);
 	}
 	assert.deepEqual(parseLayer({ rules: [{ when: { colour: "red" } }] }).problems, [
 		"rules[0]（rule-1）.when.colour 不认识",
 	]);
 	for (const part of [schema, schema.$defs.rule, schema.$defs.when]) assert.equal(part.additionalProperties, false);
-	// empty 和 error 不能一起写：读设置时记成问题，schema 也不允许。
-	assert.deepEqual(schema.$defs.when.dependentSchemas, { empty: { properties: { error: false } } });
-	assert.match(
-		parseLayer({ rules: [{ when: { empty: true, error: "x" } }] }).problems.join(),
-		/empty 和 error 不能一起写/,
-	);
+	assert.equal(schema.$defs.when.dependentSchemas, undefined, "不再有失败种类的特殊互斥条件");
+});
+
+test("failure 始终是非空字符串，没有枚举、对象或空值特例；正则由运行时检查", () => {
+	const field = schema.$defs.when.properties.failure;
+	assert.equal(field.type, "string");
+	assert.equal(field.minLength, 1);
+	assert.equal(field.enum, undefined);
+	assert.equal(field.format, undefined, "不强加 u 模式的 regex 格式检查");
+	for (const failure of ["^$", ".+", ".*", "401|^$", "empty", "error", "[\\w-.]"])
+		assert.deepEqual(parseLayer({ rules: [{ when: { failure } }] }).problems, [], failure);
+	assert.match(parseLayer({ rules: [{ when: { failure: "" } }] }).problems.join(), /需要非空正则字符串/);
 });
 
 test("每个参数的取值和读设置时一样：范围、可选值、写法", () => {

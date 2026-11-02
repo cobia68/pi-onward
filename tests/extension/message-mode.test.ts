@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { aborted, boundaryEvent, empty, err, harness, ok, tool } from "../support/fake-pi.ts";
 
 /** 兜底规则：没有内置规则，测试里要自己写。 */
-const any = [{ name: "any" }];
+const any = [{ name: "any", action: "message" }];
 const fast = (params: Record<string, unknown> = {}) => ({
 	config: { delay: "0s", ...params, rules: any },
 });
@@ -47,7 +47,7 @@ test("错误在变：只撞次数上限", async () => {
 	assert.match(h.warnings()[0], /已续跑 10 次仍未恢复/);
 });
 
-test("只处理以错误收尾的：正常结束、Esc 不续跑", async () => {
+test("正常回复、Esc 不续跑", async () => {
 	const h = harness(fast());
 	assert.equal(await h.boundary(ok()), undefined);
 	assert.equal(await h.boundary(aborted()), undefined);
@@ -119,8 +119,8 @@ test("规则：没命中的错误不处理；各规则的提示词与次数", as
 		config: {
 			delay: "0s",
 			rules: [
-				{ name: "auth", when: { error: "401" }, prompt: "鉴权抖了，接着干", maxRetries: 1 },
-				{ name: "busy", when: { error: "429|502" } },
+				{ name: "auth", when: { failure: "401" }, prompt: "鉴权抖了，接着干", maxRetries: 1 },
+				{ name: "busy", when: { failure: "429|502" } },
 			],
 		},
 	});
@@ -158,7 +158,7 @@ test("没有内置规则：没写 rules 或全部写坏都不续跑，启动时�
 	assert.equal(await typo.boundary(err("429 rate limited")), undefined);
 
 	// 全部停用也算没有可用的规则；关掉了就不提醒。
-	const off = harness({ config: { rules: [{ name: "a", enabled: false }] } });
+	const off = harness({ config: { rules: [{ name: "a", enabled: false, action: "message" }] } });
 	await off.emit("session_start", { reason: "startup" });
 	assert.match(off.notes.at(-1)![1], /没有可用的规则/);
 	const disabled = harness({ config: { enabled: false } });
@@ -170,7 +170,10 @@ test("action=stop 的规则：命中就停、只提醒，不会落到后面的�
 	const h = harness({
 		config: {
 			delay: "0s",
-			rules: [{ name: "quota", when: { error: "quota" }, action: "stop" }, { name: "any" }],
+			rules: [
+				{ name: "quota", when: { failure: "quota" }, action: "stop" },
+				{ name: "any", action: "message" },
+			],
 		},
 	});
 	assert.equal(await h.boundary(err("429 insufficient_quota")), undefined);
@@ -184,7 +187,10 @@ test("stop 规则里的键拼错了：整份设置不生效，额度错误不会
 	const h = harness({
 		config: {
 			delay: "0s",
-			rules: [{ name: "quota", when: { error: "quota" }, acton: "stop" }, { name: "any" }],
+			rules: [
+				{ name: "quota", when: { failure: "quota" }, acton: "stop" },
+				{ name: "any", action: "message" },
+			],
 		},
 	});
 	await h.emit("session_start", { reason: "startup" });
@@ -195,8 +201,8 @@ test("stop 规则里的键拼错了：整份设置不生效，额度错误不会
 	assert.match(await h.command("show rules"), /^设置文件有 1 处问题[\s\S]*- rules\[0\]（quota）\.acton 不认识/);
 });
 
-test("空回复：when.empty 的规则发「继续」，提示里说是空回复；空回复不算恢复，次数照算", async () => {
-	const h = harness({ config: { delay: "0s", rules: [{ name: "empty", when: { empty: true }, maxRetries: 2 }] } });
+test("空回复：^$ 的规则发「继续」，提示里说是空回复；空回复不算恢复，次数照算", async () => {
+	const h = harness({ config: { delay: "0s", rules: [{ name: "empty", when: { failure: "^$" }, maxRetries: 2 }] } });
 	assert.equal((await h.boundary(empty()))?.continue, true);
 	assert.match(h.notes.at(-1)![1], /^onward：空回复，0 毫秒后发「继续」$/);
 	assert.equal((await h.boundary(empty()))?.continue, true);
@@ -205,10 +211,36 @@ test("空回复：when.empty 的规则发「继续」，提示里说是空回复
 	assert.match(h.warnings()[0], /已续跑 2 次仍未恢复/);
 });
 
-test("空回复：没有 when.empty 的规则时不处理，不带 when 的兜底也不管", async () => {
-	const h = harness(fast());
-	assert.equal(await h.boundary(empty()), undefined);
-	assert.deepEqual(h.sent, []);
+test(".+ 只处理普通错误；不带 failure 的兜底也处理空回复", async () => {
+	const errors = harness({ config: { delay: "0s", rules: [{ when: { failure: ".+" } }] } });
+	assert.equal(await errors.boundary(empty()), undefined);
+	assert.deepEqual(errors.sent, []);
+	assert.equal((await errors.boundary(err()))?.continue, true);
+	const all = harness(fast());
+	assert.equal((await all.boundary(empty()))?.continue, true);
+	assert.deepEqual(all.sent, ["继续"]);
+});
+
+test("同一个 failure 正则可以处理 401 和空回复，其他错误不续跑", async () => {
+	const h = harness({
+		config: { delay: "0s", rules: [{ when: { failure: "401|^$" }, prompt: "继续：{error}" }] },
+	});
+	await h.boundary(err("401 Invalid API key"));
+	await h.boundary(empty({ content: [{ type: "thinking", thinking: "只有思考" }] }));
+	assert.equal(await h.boundary(err("502 Bad Gateway")), undefined);
+	assert.deepEqual(h.sent, ["继续：401 invalid api key", "继续：空回复"]);
+});
+
+test("旧的 error/empty 条件和空 failure 会阻止续跑，启动及 show 都能看到原因", async () => {
+	for (const when of [{ error: "401" }, { empty: true }, { failure: "" }]) {
+		const h = harness({ config: { delay: "0s", rules: [{ when }, { action: "message" }] } });
+		await h.emit("session_start", { reason: "startup" });
+		assert.match(h.warnings()[0]!, /有 1 处问题，修好之前不会自动续跑/);
+		assert.match(await h.command("show rules"), /when\.(error|empty|failure)/);
+		assert.equal(await h.boundary(err()), undefined);
+		assert.equal(await h.boundary(empty()), undefined);
+		assert.deepEqual(h.sent, []);
+	}
 });
 
 test("静默重发之后收到空回复：接着发「继续」，不当成已经恢复", async () => {
@@ -216,8 +248,8 @@ test("静默重发之后收到空回复：接着发「继续」，不当成已�
 		config: {
 			delay: "0s",
 			rules: [
-				{ name: "auth", when: { error: "401" }, action: "resend", maxRetries: 1 },
-				{ name: "empty", when: { empty: true } },
+				{ name: "auth", when: { failure: "401" }, action: "resend", maxRetries: 1 },
+				{ name: "empty", when: { failure: "^$" } },
 			],
 		},
 	});

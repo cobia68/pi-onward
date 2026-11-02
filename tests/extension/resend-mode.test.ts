@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { aborted, boundaryEvent, err, harness, ok, tool } from "../support/fake-pi.ts";
+import { aborted, boundaryEvent, empty, err, harness, ok, tool } from "../support/fake-pi.ts";
 
 const resend = (params: Record<string, unknown> = {}) => ({
-	config: { action: "resend", delay: "0s", ...params, rules: [{ name: "any" }] },
+	config: { action: "resend", delay: "0s", ...params, rules: [{ name: "any", when: { failure: ".*" } }] },
 });
 
 test("边界上省略失败消息并要求重发，不追加消息", async () => {
@@ -14,6 +14,17 @@ test("边界上省略失败消息并要求重发，不追加消息", async () =>
 		continue: true,
 	});
 	assert.match(h.notes.at(-1)![1], /^onward：0 毫秒后静默重发$/);
+});
+
+test(".* 匹配空回复时也按 resend 静默重发，不追加消息", async () => {
+	const h = harness(resend());
+	const result = await h.boundary(empty(), "blank");
+	assert.deepEqual(result, {
+		entries: [{ type: "context_edit", targetId: "blank", replacement: null }],
+		continue: true,
+	});
+	assert.deepEqual(h.sent, []);
+	assert.equal(h.notes.at(-1)![1], "onward：空回复，0 毫秒后静默重发");
 });
 
 test("保留其他扩展已经提出的条目", async () => {
@@ -65,7 +76,7 @@ test("同一份设置里 resend 规则与 message 规则各走各的", async () 
 		config: {
 			delay: "0s",
 			rules: [
-				{ name: "auth", when: { error: "401" }, action: "resend" },
+				{ name: "auth", when: { failure: "401" }, action: "resend" },
 				{ name: "rest", action: "message" },
 			],
 		},

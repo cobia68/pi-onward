@@ -10,21 +10,21 @@
     {
       "name": "quota",
       "when": {
-        "error": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|usage limit|余额不足|额度不足|额度已用尽"
+        "failure": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|usage limit|余额不足|额度不足|额度已用尽"
       },
       "action": "stop"
     },
     {
       "name": "context-overflow",
       "when": {
-        "error": "context[\\s_-]*(length|window)|prompt (is )?too long|maximum context|request_too_large"
+        "failure": "context[\\s_-]*(length|window)|prompt (is )?too long|maximum context|request_too_large"
       },
       "action": "stop"
     },
     {
       "name": "auth",
       "when": {
-        "error": "\\b401\\b|unauthorized|authentication|invalid[\\s_-]*(x-)?(api[\\s_-]*)?(key|token)"
+        "failure": "\\b401\\b|unauthorized|authentication|invalid[\\s_-]*(x-)?(api[\\s_-]*)?(key|token)"
       },
       "action": "resend",
       "maxRetries": 20,
@@ -33,7 +33,7 @@
     {
       "name": "rate-limit",
       "when": {
-        "error": "\\b429\\b|rate[\\s_-]*limit|too many requests|resource[\\s_-]*exhausted"
+        "failure": "\\b429\\b|rate[\\s_-]*limit|too many requests|resource[\\s_-]*exhausted"
       },
       "action": "resend",
       "maxRetries": 5,
@@ -42,21 +42,21 @@
     {
       "name": "server",
       "when": {
-        "error": "\\b(500|502|503|504|520|524|529)\\b|overloaded|server[\\s_-]*error|internal[\\s_-]*error|bad gateway|service[\\s_-]*unavailable|upstream|负载已饱和"
+        "failure": "\\b(500|502|503|504|520|524|529)\\b|overloaded|server[\\s_-]*error|internal[\\s_-]*error|bad gateway|service[\\s_-]*unavailable|upstream|负载已饱和"
       },
       "action": "resend"
     },
     {
       "name": "network",
       "when": {
-        "error": "connection|network|econnreset|econnrefused|etimedout|socket hang up|fetch failed|timed? ?out|terminated"
+        "failure": "connection|network|econnreset|econnrefused|etimedout|socket hang up|fetch failed|timed? ?out|terminated"
       },
       "action": "resend"
     },
     {
       "name": "empty",
       "when": {
-        "empty": true
+        "failure": "^$"
       },
       "action": "message",
       "maxRetries": 3
@@ -64,7 +64,7 @@
     {
       "name": "fallback",
       "action": "message",
-      "prompt": "上一步出错了（{error}），接着做",
+      "prompt": "上一步失败了（{error}），接着做",
       "maxRetries": 3,
       "maxSameError": 2
     }

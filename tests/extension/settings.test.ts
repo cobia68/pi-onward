@@ -22,7 +22,7 @@ test("命令改了就存，重新加载还在", async () => {
 });
 
 test("保存不动手写的 rules，也不覆盖加载后才手改的内容", async () => {
-	const rules = [{ name: "auth", when: { error: "401" } }];
+	const rules = [{ name: "auth", when: { failure: "401" } }];
 	const h = harness({ config: { rules } });
 	writeFileSync(h.configPath, JSON.stringify({ enabled: false, maxRetries: 5, rules, note: "hand-edited" }));
 	await h.command("set action=resend");
@@ -48,9 +48,9 @@ test("reset 去掉开关和参数，保留手写的 rules", async () => {
 	assert.match(await h.command("reset"), /^💤 onward：开.*\n已恢复默认\n[\s\S]*最多 10 次/);
 	assert.deepEqual(read(h.configPath), {});
 
-	const kept = harness({ config: { enabled: false, maxRetries: 3, rules: [{ name: "a" }] } });
+	const kept = harness({ config: { enabled: false, maxRetries: 3, rules: [{ name: "a", action: "message" }] } });
 	assert.match(await kept.command("reset"), /手写的 rules 保留/);
-	assert.deepEqual(read(kept.configPath), { rules: [{ name: "a" }] });
+	assert.deepEqual(read(kept.configPath), { rules: [{ name: "a", action: "message" }] });
 });
 
 test("坏 JSON：不续跑、拒绝写、提示", async () => {
@@ -79,13 +79,13 @@ test("顶层不是对象：和坏 JSON 一样，不当成空设置，也不被�
 });
 
 test("内容有问题：启动和状态都说清不会续跑；命令照常合并写入，修好就生效", async () => {
-	const h = harness({ config: { enabled: "yes", rules: [{ name: "any" }] } });
+	const h = harness({ config: { enabled: "yes", rules: [{ name: "any", action: "message" }] } });
 	await h.emit("session_start", { reason: "startup" });
 	assert.equal(h.warnings()[0], "🛑 onward：全局设置有 1 处问题，修好之前不会自动续跑（/onward show 查看）");
 	assert.match(await h.command("status"), /^🛑 onward：开，但设置文件有 1 处问题/);
 	assert.equal(h.notes.at(-1)![0], "warning");
 	assert.match(await h.command("on"), /^⏩ onward：开，1 条规则生效/);
-	assert.deepEqual(read(h.configPath), { enabled: true, rules: [{ name: "any" }] });
+	assert.deepEqual(read(h.configPath), { enabled: true, rules: [{ name: "any", action: "message" }] });
 
 	// 关着也提醒：可能就是要关掉的那一项写错了。
 	const off = harness({ config: { enabled: false, maxRetries: 0 } });
@@ -96,13 +96,13 @@ test("内容有问题：启动和状态都说清不会续跑；命令照常合�
 
 test("show：每个参数的值和来源，再是规则", async () => {
 	const h = harness({
-		config: { action: "resend", delay: "5s,10s", rules: [{ name: "auth", when: { error: "401" } }] },
+		config: { action: "resend", delay: "5s,10s", rules: [{ name: "auth", when: { failure: "401" } }] },
 	});
 	const text = await h.command("show");
 	assert.match(text, /action\s+resend（全局设置）/);
 	assert.match(text, /prompt\s+「继续」（内置默认值）/);
 	assert.match(text, /delay\s+5s,10s（全局设置）/);
-	assert.match(text, /^1\. auth\n {3}条件 {2}错误匹配 \/401\/i\n {3}做法 {2}静默重发同一个请求$/m);
+	assert.match(text, /^1\. auth\n {3}条件 {2}失败匹配 \/401\/i\n {3}做法 {2}静默重发同一个请求$/m);
 	assert.match(await h.command("show rules"), /^规则（按顺序，第一条命中的生效/);
 });
 
