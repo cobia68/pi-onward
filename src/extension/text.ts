@@ -91,10 +91,10 @@ export function commandErrorNotice(message: string, topic?: string): Notice {
 	return warning(`onward：${message}；用法见 /${COMMAND}${topic ? ` ${topic}` : ""} --help`);
 }
 
-/** `/onward` 菜单的标题：现在的状态；写了 `--scope` 时补上这个菜单看、改的是哪一份。 */
+/** 菜单标题区分运行状态与修改目标；默认菜单只说修改默认写全局，不把查看合并结果也标成全局。 */
 export function menuTitle(settings: Settings, scope?: Scope): string {
-	const headline = statusHeadline(settings);
-	return scope ? `${headline} · ${SCOPE_NAMES[scope]}设置` : headline;
+	const target = scope ? `${SCOPE_NAMES[scope]}设置` : `修改默认写入：${SCOPE_NAMES.global}设置`;
+	return `${statusHeadline(settings)} · ${target}`;
 }
 
 /** `/onward` 菜单里进到这一份的菜单的那一项的说明。 */
@@ -102,7 +102,7 @@ export function layerMenuText(scope: Scope): string {
 	return `只看、只改${SCOPE_NAMES[scope]}设置`;
 }
 
-/** 一行说清现在会不会续跑：`/onward status` 的第一行，也是 `/onward` 菜单的标题。 */
+/** 一行说清现在会不会续跑：`/onward status` 的第一行，也是 `/onward` 菜单标题里的状态部分。 */
 export function statusHeadline(settings: Settings): string {
 	const { config } = settings;
 	if (brokenFiles(settings).length) return `${STOPPED} onward：设置文件读不了，${UNTIL_FIXED}`;
@@ -275,9 +275,9 @@ export function quietLine(quiet: boolean | undefined): string {
 		: "onward 的启动提示照常显示，不管 pi 的 quietStartup";
 }
 
-/** 改了开关或参数之后：有项目级设置在用、或者改的就是项目级时，说改的是哪一份；只有一份时说了也多余。 */
-export function scopeLine(settings: Settings, scope: Scope): string | undefined {
-	return scope === "project" || settings.projectFile !== undefined ? `改的是${SCOPE_NAMES[scope]}设置` : undefined;
+/** 改了开关或参数之后，总是说清目标层级，和有没有项目级设置无关。 */
+export function scopeLine(scope: Scope): string {
+	return `改的是${SCOPE_NAMES[scope]}设置`;
 }
 
 /**
@@ -291,12 +291,9 @@ export function shadowLine(settings: Settings, scope: Scope, keys: readonly stri
 		: undefined;
 }
 
-/** reset 之后说做了什么。有项目级设置在用时，「恢复默认」不对：去掉的那份之外，另一份还在。 */
-export function resetLine(settings: Settings, scope: Scope, keptRules: boolean): string {
-	const done =
-		scope === "project" || settings.projectFile !== undefined
-			? `已去掉${SCOPE_NAMES[scope]}的开关和参数`
-			: "已恢复默认";
+/** reset 只去掉目标层的开关和参数，不能笼统地说「恢复默认」。 */
+export function resetLine(scope: Scope, keptRules: boolean): string {
+	const done = `已去掉${SCOPE_NAMES[scope]}的开关和参数`;
 	return keptRules ? `${done}，手写的 rules 保留` : done;
 }
 

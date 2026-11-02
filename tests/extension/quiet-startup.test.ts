@@ -63,7 +63,7 @@ test("set、unset quietStartup：只改全局，回复说启动提示现在怎�
 	await start(h);
 	assert.match(
 		await h.command("set quietStartup=true"),
-		/^⏩ onward：开，1 条规则生效\nonward 的启动提示不显示；设置有问题时照样警告\n/,
+		/^⏩ onward：开，1 条规则生效\n改的是全局设置\nonward 的启动提示不显示；设置有问题时照样警告\n/,
 	);
 	assert.deepEqual(read(h.configPath), { quietStartup: true, rules: [{ name: "any", action: "message" }] });
 	assert.match(await h.command("--scope global show"), /^全局设置 \S+\n {2}quietStartup {2}true\n/);
@@ -72,7 +72,7 @@ test("set、unset quietStartup：只改全局，回复说启动提示现在怎�
 	assert.match(await h.command("unset quietStartup"), /\nonward 的启动提示跟着 pi 的 quietStartup\n/);
 	assert.deepEqual(read(h.configPath), { rules: [{ name: "any", action: "message" }] });
 	await h.command("set quietStartup=true maxRetries=3");
-	assert.match(await h.command("reset"), /^⏩ onward：开，1 条规则生效\n已恢复默认，手写的 rules 保留\n/);
+	assert.match(await h.command("reset"), /^⏩ onward：开，1 条规则生效\n已去掉全局的开关和参数，手写的 rules 保留\n/);
 	assert.deepEqual(read(h.configPath), { rules: [{ name: "any", action: "message" }] });
 	assert.deepEqual(parseCommand("set quietStartup=true"), {
 		kind: "update",

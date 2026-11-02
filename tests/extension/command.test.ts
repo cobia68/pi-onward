@@ -162,12 +162,12 @@ test("--help 不执行：不改设置", async () => {
 	assert.equal(await h.command("status"), before, "没有改");
 });
 
-test("/onward 不写动作：弹菜单，标题是现在的状态；取消就什么都不做", async () => {
+test("/onward 不写动作：菜单标明状态和默认修改全局；取消就什么都不做", async () => {
 	const h = harness({ config: { rules: [{ name: "any", action: "message" }] } });
 	assert.equal(await h.command(""), "", "没有回复");
 	assert.equal(h.menus.length, 1);
 	const [menu] = h.menus;
-	assert.equal(menu!.title, "⏩ onward：开，1 条规则生效");
+	assert.equal(menu!.title, "⏩ onward：开，1 条规则生效 · 修改默认写入：全局设置");
 	assert.deepEqual(
 		menu!.options.map((label) => label.split(/\s{2,}/)[0]!.trim()),
 		[...ACTIONS, "--scope global …", "--scope project …", "--help"],
@@ -177,6 +177,27 @@ test("/onward 不写动作：弹菜单，标题是现在的状态；取消就什
 	const column = (label: string) => cells(label.slice(0, label.search(/\s{2}\S/)));
 	assert.equal(new Set(menu!.options.map(column)).size, 1);
 	assert.equal(h.editorText, undefined);
+});
+
+test("菜单区分生效状态与修改目标：项目关着时，默认仍修改全局", async () => {
+	const h = harness({
+		config: { enabled: true, rules: [{ name: "any", action: "message" }] },
+		project: { enabled: false },
+	});
+	await h.emit("session_start", { reason: "startup" });
+	const before = [readFileSync(h.configPath, "utf8"), readFileSync(h.projectPath, "utf8")];
+	const notes = h.notes.length;
+	const cases: [string, string][] = [
+		["", "修改默认写入：全局设置"],
+		["--scope global", "全局设置"],
+		["--scope project", "项目级设置"],
+	];
+	for (const [command, target] of cases) {
+		await h.command(command);
+		assert.equal(h.menus.at(-1)!.title, `💤 onward：关，出错时不会自动续跑 · ${target}`);
+	}
+	assert.equal(h.notes.length, notes, "取消菜单不发通知，也不执行动作");
+	assert.deepEqual([readFileSync(h.configPath, "utf8"), readFileSync(h.projectPath, "utf8")], before);
 });
 
 test("菜单：选了就执行；set、unset 填进输入框接着写参数", async () => {

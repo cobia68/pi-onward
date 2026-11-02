@@ -1,6 +1,6 @@
 /**
  * `/onward <动作> [参数]`：动作在前，参数写成 `字段=值`，字段名和设置文件一样。动作、字段、取值和选项都区分大小写，
- * 和设置文件、pi 自己的命令名一样。`set` 全有或全无：任何一项不合法就一项都不写。不写动作时弹出菜单，标题是现在的状态。
+ * 和设置文件、pi 自己的命令名一样。`set` 全有或全无：任何一项不合法就一项都不写。不写动作时弹出菜单，标明当前状态和修改目标。
  *
  * `--help` 是结束：写在哪都只显示帮助、不执行，跟在动作后面时显示这个动作的帮助。补全在每个动作后面都给它，
  * 写了它之后什么都不再给，后面有没有空格都一样。
@@ -197,7 +197,7 @@ export function registerCommand(pi: ExtensionAPI, settings: Settings, onward: On
 }
 
 /**
- * `/onward` 不写动作：弹出菜单，标题是现在的状态。返回选中的命令；要写参数的（set、unset）填进输入框接着写，
+ * `/onward` 不写动作：弹出菜单，标明当前状态和修改目标。返回选中的命令；要写参数的（set、unset）填进输入框接着写，
  * 返回 undefined。写了 `--scope` 时只列改这一份的动作，选中的命令带着它。没有界面时不弹，什么都不做。
  */
 async function choose(ctx: ExtensionContext, settings: Settings, scope?: Scope): Promise<string | undefined> {
@@ -264,14 +264,14 @@ function execute(
 			onward.stop(ctx);
 			const saved = settings.reset(command.scope);
 			const kept = saved.kind === "saved" && Array.isArray(saved.value.rules) && saved.value.rules.length > 0;
-			const done = note(resetLine(settings, command.scope, kept), shadowLine(settings, command.scope, COMMAND_KEYS));
+			const done = note(resetLine(command.scope, kept), shadowLine(settings, command.scope, COMMAND_KEYS));
 			return changedNotice(saved, settings, onward.progress(), done);
 		}
 		case "update": {
 			const saved = settings.update(command.scope, command.change);
 			const keys = changedKeys(command.change);
 			const done = note(
-				scopeLine(settings, command.scope),
+				scopeLine(command.scope),
 				keys.includes(QUIET) ? quietLine(settings.config.quietStartup) : undefined,
 				shadowLine(settings, command.scope, keys),
 			);
@@ -528,7 +528,7 @@ function overallHelp(): string {
 		`用法：/${COMMAND} [${SCOPE} <${SCOPES.join("|")}>] [动作] [参数] [${HELP}]`,
 		...section("动作", table(ACTIONS.map((item) => [item.name, item.description]))),
 		"",
-		`  不写动作时弹出菜单，标题是现在的状态；菜单里的 ${SCOPE} <层> … 进到只看、只改那一份的菜单`,
+		`  不写动作时弹出菜单，标题区分当前状态和修改目标；菜单里的 ${SCOPE} <层> … 进到只看、只改那一份的菜单`,
 		`  ${scopedActions("write")} 改哪一份设置由 ${SCOPE} 定，写在动作前：不写或 global 是全局，project 是当前目录的项目级`,
 		`  show 不写 ${SCOPE} 时看合并后的结果，写了只看那一份`,
 		`  每个动作的用法：/${COMMAND} <动作> ${HELP}（只显示帮助，不执行）`,

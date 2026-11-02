@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Settings } from "../../src/extension/settings.ts";
@@ -9,7 +9,9 @@ const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 
 test("命令改了就存，重新加载还在", async () => {
 	const h = harness();
-	assert.match(await h.command("set maxRetries=5"), /最多 5 次/);
+	const text = await h.command("set maxRetries=5");
+	assert.match(text, /最多 5 次/);
+	assert.equal(text.split("\n")[1], "改的是全局设置");
 	assert.equal(read(h.configPath).maxRetries, 5);
 	if (process.platform !== "win32") assert.equal(statSync(h.configPath).mode & 0o777, 0o600);
 	const again = harness({ configPath: h.configPath });
@@ -19,6 +21,48 @@ test("命令改了就存，重新加载还在", async () => {
 	assert.match(await h.command("status"), /^💤 onward：关/);
 	await h.command("unset maxRetries");
 	assert.equal("maxRetries" in read(h.configPath), false);
+});
+
+test("只有全局配置时，所有修改命令也明确目标；默认和显式 global 一致", async () => {
+	const rules = [{ name: "any", action: "message" }];
+	const cases: [string, Record<string, unknown>][] = [
+		["on", { enabled: true, maxRetries: 5, rules }],
+		["off", { enabled: false, maxRetries: 5, rules }],
+		["set maxRetries=7", { enabled: false, maxRetries: 7, rules }],
+		["unset maxRetries", { enabled: false, rules }],
+		["reset", { rules }],
+	];
+	for (const prefix of ["", "--scope global "]) {
+		for (const [action, expected] of cases) {
+			const h = harness({ config: { enabled: false, maxRetries: 5, rules } });
+			await h.emit("session_start", { reason: "startup" });
+			const command = `${prefix}${action}`;
+			const text = await h.command(command);
+			const target = action === "reset" ? "已去掉全局的开关和参数，手写的 rules 保留" : "改的是全局设置";
+			assert.equal(text.split("\n")[1], target, command);
+			assert.equal(text.split("\n").filter((line) => line === target).length, 1, "目标不重复提示");
+			assert.deepEqual(read(h.configPath), expected, command);
+			assert.equal(existsSync(h.projectPath), false, "没有误建项目级配置");
+		}
+	}
+});
+
+test("只读命令不带修改目标提示，仍区分合并结果与单层配置", async () => {
+	const h = harness({
+		config: { maxRetries: 5, rules: [{ name: "any", action: "message" }] },
+		project: { maxRetries: 2 },
+	});
+	await h.emit("session_start", { reason: "startup" });
+	const before = [readFileSync(h.configPath, "utf8"), readFileSync(h.projectPath, "utf8")];
+	for (const command of ["status", "show", "show rules", "reload", "--scope global show", "--scope project show"]) {
+		const text = await h.command(command);
+		assert.doesNotMatch(text, /改的是(?:全局|项目级)设置|已去掉(?:全局|项目级)|修改默认写入/, command);
+		if (command === "show") assert.match(text, /^ {2}maxRetries +2（项目级设置）$/m);
+		if (command === "--scope global show") assert.match(text, /^ {2}maxRetries +5$/m);
+		if (command === "--scope project show") assert.match(text, /^ {2}maxRetries +2$/m);
+		if (command === "status" || command === "reload") assert.match(text, /最多 2 次/);
+	}
+	assert.deepEqual([readFileSync(h.configPath, "utf8"), readFileSync(h.projectPath, "utf8")], before);
 });
 
 test("保存不动手写的 rules，也不覆盖加载后才手改的内容", async () => {
@@ -38,14 +82,16 @@ test("保存不动手写的 rules，也不覆盖加载后才手改的内容", as
 
 test("一项不合法就都不改", async () => {
 	const h = harness({ config: { maxRetries: 5 } });
-	assert.match(await h.command("set maxRetries=7 delay=5"), /未做任何修改/);
+	const text = await h.command("set maxRetries=7 delay=5");
+	assert.match(text, /未做任何修改/);
+	assert.doesNotMatch(text, /改的是(?:全局|项目级)设置/);
 	assert.deepEqual(read(h.configPath), { maxRetries: 5 });
 });
 
 test("reset 去掉开关和参数，保留手写的 rules", async () => {
 	const h = harness();
 	await h.command("set maxRetries=5");
-	assert.match(await h.command("reset"), /^💤 onward：开.*\n已恢复默认\n[\s\S]*最多 10 次/);
+	assert.match(await h.command("reset"), /^💤 onward：开.*\n已去掉全局的开关和参数\n[\s\S]*最多 10 次/);
 	assert.deepEqual(read(h.configPath), {});
 
 	const kept = harness({ config: { enabled: false, maxRetries: 3, rules: [{ name: "a", action: "message" }] } });

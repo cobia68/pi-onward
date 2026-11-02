@@ -191,7 +191,7 @@ pi 明确报错，或正常结束却没有非空文字、也没有工具调用�
 
 | 命令 | 作用 |
 | :-- | :-- |
-| `/onward` | 弹出菜单 |
+| `/onward` | 弹出菜单，提示默认修改全局设置 |
 | `/onward status` | 现在会不会续跑、默认参数、设置文件在哪 |
 | `/onward on` · `off` | 开关 |
 | `/onward show` | 各项参数的值和来源、规则、设置文件里的问题 |
@@ -201,7 +201,7 @@ pi 明确报错，或正常结束却没有非空文字、也没有工具调用�
 | `/onward reset` | 去掉开关和参数，保留手写的 `rules` |
 | `/onward --help` | 用法；`/onward set --help` 还列出字段和默认值 |
 
-- 改项目级设置：把 `--scope project` 写在动作前，例如 `/onward --scope project set maxRetries=3`
+- 改设置默认写入全局，成功后会说明改的是哪一层；改项目级设置，把 `--scope project` 写在动作前，例如 `/onward --scope project set maxRetries=3`
 - 值里有空格时加双引号：`/onward set prompt="接着做，第 {attempt} 次"`
 - 动作、字段和取值都区分大小写；按 Tab 可以补全
 
