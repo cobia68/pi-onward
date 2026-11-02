@@ -38,6 +38,31 @@ test("每条规则各自的次数上限", () => {
 	assert.deepEqual(tracker.progress(), { used: 3, streak: 1 });
 });
 
+test("只提高 maxRetries 不会放宽默认同错上限：续跑 10 次后仍停", () => {
+	const tracker = new Tracker();
+	const policy = resolvePolicy({}, { maxRetries: 20 });
+	for (let attempt = 1; attempt <= 10; attempt++) assert.equal(tracker.next("auth", err(), policy).retry, true);
+	assert.deepEqual(tracker.next("auth", err(), policy), {
+		retry: false,
+		reason: "same-error",
+		attempt: 10,
+		streak: 11,
+		notify: true,
+	});
+});
+
+test("同错计数不分规则，但按当前命中规则的上限判断", () => {
+	const tracker = new Tracker();
+	assert.equal(tracker.next("a", err(), resolvePolicy({ maxSameError: 3 })).retry, true);
+	assert.deepEqual(tracker.next("b", err(), resolvePolicy({ maxSameError: 1 })), {
+		retry: false,
+		reason: "same-error",
+		attempt: 0,
+		streak: 2,
+		notify: true,
+	});
+});
+
 test("action=stop：命中就停", () => {
 	const step = new Tracker().next("quota", err(), resolvePolicy({ action: "stop" }));
 	assert.equal(!step.retry && step.reason, "stop");

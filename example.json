@@ -28,6 +28,7 @@
       },
       "action": "resend",
       "maxRetries": 20,
+      "maxSameError": 10,
       "delay": "3s..10s"
     },
     {
@@ -37,6 +38,7 @@
       },
       "action": "resend",
       "maxRetries": 5,
+      "maxSameError": 10,
       "delay": "30s,1m,2m"
     },
     {
@@ -59,7 +61,8 @@
         "failure": "^$"
       },
       "action": "message",
-      "maxRetries": 3
+      "maxRetries": 3,
+      "maxSameError": 10
     },
     {
       "name": "fallback",

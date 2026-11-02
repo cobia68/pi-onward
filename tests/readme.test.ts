@@ -68,4 +68,11 @@ test("example.json：解析无问题，顶层参数就是内置默认值，rules
 			assert.equal("error" in rule.when || "empty" in rule.when, false, rule.name);
 		}
 	}
+	for (const rule of config.rules) {
+		if (rule.patch.maxRetries !== undefined)
+			assert.notEqual(rule.patch.maxSameError, undefined, `${rule.name} 单独设置次数时同时写出同错上限`);
+	}
+	const auth = matchFailure(config, err("401 Invalid API key"))!;
+	assert.equal(auth.policy.maxRetries, 20);
+	assert.equal(auth.policy.maxSameError, 10, "没有放宽同错保护");
 });
