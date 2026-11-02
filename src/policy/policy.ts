@@ -25,6 +25,8 @@ export interface Field<K extends keyof Policy = keyof Policy> {
 	/** 帮助里的写法。 */
 	syntax: string;
 	description: string;
+	/** 只在这些动作下使用；不写表示都使用。规则显式写了不适用的参数时只提醒。 */
+	appliesTo?: readonly Action[];
 	/** 补全的候选值。 */
 	choices?: readonly { value: string; description: string }[];
 	/** 设置文件里的值；合法时返回 value，否则返回原因。 */
@@ -65,6 +67,7 @@ export const FIELDS: readonly Field[] = [
 	}),
 	field({
 		name: "prompt",
+		appliesTo: ["message"],
 		syntax: "文字",
 		description: "message 发的消息，可含 {attempt} {max} {error} {rule}",
 		read: (v) =>
@@ -77,6 +80,7 @@ export const FIELDS: readonly Field[] = [
 	}),
 	field({
 		name: "maxRetries",
+		appliesTo: ["message", "resend"],
 		syntax: `${RETRIES.min}–${RETRIES.max}`,
 		description: "连续失败时最多续跑几次",
 		read: (v) => integer(v, RETRIES.min, RETRIES.max),
@@ -86,6 +90,7 @@ export const FIELDS: readonly Field[] = [
 	}),
 	field({
 		name: "maxSameError",
+		appliesTo: ["message", "resend"],
 		syntax: `${RETRIES.min}–${RETRIES.max}`,
 		description: "同一个错误最多续跑几次，再出现就彻底停",
 		read: (v) => integer(v, RETRIES.min, RETRIES.max),
@@ -95,6 +100,7 @@ export const FIELDS: readonly Field[] = [
 	}),
 	field({
 		name: "delay",
+		appliesTo: ["message", "resend"],
 		syntax: DELAY_SYNTAX,
 		description: "列表按顺序等，最后一个值重复；起步..封顶按次数增长",
 		read: (v) => {

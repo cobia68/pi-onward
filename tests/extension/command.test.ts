@@ -163,7 +163,7 @@ test("--help 不执行：不改设置", async () => {
 });
 
 test("/onward 不写动作：弹菜单，标题是现在的状态；取消就什么都不做", async () => {
-	const h = harness({ config: { rules: [{ name: "any" }] } });
+	const h = harness({ config: { rules: [{ name: "any", action: "message" }] } });
 	assert.equal(await h.command(""), "", "没有回复");
 	assert.equal(h.menus.length, 1);
 	const [menu] = h.menus;
@@ -181,7 +181,7 @@ test("/onward 不写动作：弹菜单，标题是现在的状态；取消就什
 
 test("菜单：选了就执行；set、unset 填进输入框接着写参数", async () => {
 	const label = (action: string) => menuItems().find((item) => item.input === action)!.label;
-	const h = harness({ config: { rules: [{ name: "any" }] } });
+	const h = harness({ config: { rules: [{ name: "any", action: "message" }] } });
 	h.pick = () => label("off");
 	assert.match(await h.command(""), /^💤 onward：关/);
 	h.pick = () => label("status");
@@ -219,7 +219,7 @@ test("/onward --scope project：菜单只列能写 --scope 的动作，选中的
 			"--help",
 		],
 	);
-	const h = harness({ config: { rules: [{ name: "any" }] } });
+	const h = harness({ config: { rules: [{ name: "any", action: "message" }] } });
 	await h.emit("session_start", { reason: "startup" });
 	h.pick = () => items.find((item) => item.input === "--scope project off")!.label;
 	assert.match(await h.command("--scope project"), /^💤 onward：关.*\n改的是项目级设置/);
@@ -231,7 +231,7 @@ test("/onward --scope project：菜单只列能写 --scope 的动作，选中的
 });
 
 test("/onward 的菜单里选 --scope <层> …：接着弹这一份的菜单", async () => {
-	const h = harness({ config: { rules: [{ name: "any" }] } });
+	const h = harness({ config: { rules: [{ name: "any", action: "message" }] } });
 	await h.emit("session_start", { reason: "startup" });
 	const top = menuItems().find((item) => item.input === "--scope project")!.label;
 	const off = menuItems("project").find((item) => item.input === "--scope project off")!.label;

@@ -32,6 +32,17 @@ test("键和读设置时认的一样：顶层、规则、条件都不多不少",
 	assert.equal(schema.$defs.when.dependentSchemas, undefined, "不再有失败种类的特殊互斥条件");
 });
 
+test("兜底要显式写 action：schema 要求动作或非空 when，与读设置时一致", () => {
+	assert.deepEqual(schema.$defs.rule.anyOf, [
+		{ required: ["action"] },
+		{ required: ["when"], properties: { when: { minProperties: 1 } } },
+	]);
+	for (const rule of [{}, { name: "fallback" }, { when: {} }])
+		assert.match(parseLayer({ action: "resend", rules: [rule] }).problems.join(), /action 不能省略/);
+	for (const rule of [{ action: "message" }, { when: {}, action: "stop" }, { when: { failure: "401" } }])
+		assert.deepEqual(parseLayer({ rules: [rule] }).problems, []);
+});
+
 test("failure 始终是非空字符串，没有枚举、对象或空值特例；正则由运行时检查", () => {
 	const field = schema.$defs.when.properties.failure;
 	assert.equal(field.type, "string");

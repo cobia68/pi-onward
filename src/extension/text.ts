@@ -9,7 +9,7 @@
  * 停手说为什么、怎么办，不重复图标、次数和规则名。错误本身 pi 已经在上面用红字显示，提示里也不再摘。
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Config, Hit } from "../policy/config.ts";
+import { type Config, configWarnings, type Hit } from "../policy/config.ts";
 import { formatDelay, retryDelay, totalDelay } from "../policy/delay.ts";
 import { EMPTY_REPLY, errorSignature, type Failure } from "../policy/failure.ts";
 import { DEFAULT_POLICY, FIELDS, type Field, type Policy, type PolicyPatch, resolvePolicy } from "../policy/policy.ts";
@@ -117,7 +117,7 @@ export function statusHeadline(settings: Settings): string {
 }
 
 export function statusNotice(settings: Settings, progress: Progress, note?: string): Notice {
-	return { message: statusText(settings, progress, note), level: needsFix(settings) ? "warning" : "info" };
+	return settingsNotice(settings, statusText(settings, progress, note));
 }
 
 /**
@@ -131,6 +131,8 @@ function statusText(settings: Settings, { used, streak }: Progress, note?: strin
 	// 读不了的文件也记成一处问题，所以这里不用另外看。
 	const usable = !config.problems.length;
 	if (usable) lines.push(...section("规则没写的参数", table(policyRows(resolvePolicy(config.defaults)))));
+	const reminders = ruleWarningSummary(config);
+	if (reminders) lines.push("", `${reminders}（${SEE_SHOW}）`);
 	lines.push(...section("设置文件", table(fileRows(settings.files))), "");
 	if (!usable) lines.push(`改好之后 /${COMMAND} reload；问题见 /${COMMAND} show`);
 	else if (!config.enabled)
@@ -172,7 +174,8 @@ export function showNotice(settings: Settings): Notice {
 		const where = from ? `${SCOPE_NAMES[from]}设置` : "内置默认值";
 		return [item.name, `${(item as Field<typeof item.name>).show(value)}（${where}）`];
 	});
-	return info(
+	return settingsNotice(
+		settings,
 		[
 			"规则没写的参数",
 			...table(rows),
@@ -240,8 +243,9 @@ function shown(item: Field, values: PolicyPatch): string {
 /** `/onward show rules`。设置文件读不了时说读不了：规则一条也没读到，不是没写。 */
 export function rulesNotice(settings: Settings): Notice {
 	const broken = brokenFiles(settings);
-	if (!broken.length) return info(rulesText(settings));
-	return info(
+	if (!broken.length) return settingsNotice(settings, rulesText(settings));
+	return settingsNotice(
+		settings,
 		[`设置文件读不了，${UNTIL_FIXED}`, ...table(fileRows(broken)), "", `改好之后 /${COMMAND} reload`].join("\n"),
 	);
 }
@@ -372,7 +376,15 @@ export function describeRules(config: Config, from?: string): string {
 			...table(rows).map((line) => ` ${line}`),
 		];
 	});
-	return [...source, "规则（按顺序，第一条命中的生效；没命中的错误和空回复不处理）", ...blocks.flat()].join("\n");
+	return [
+		...source,
+		"规则（按顺序，第一条命中的生效；没命中的错误和空回复不处理）",
+		...blocks.flat(),
+		...section(
+			"规则提醒（不影响设置生效）",
+			configWarnings(config).map((text) => `- ${text}`),
+		),
+	].join("\n");
 }
 
 function describeWhen({ when }: Rule): string {
@@ -384,9 +396,15 @@ function describeWhen({ when }: Rule): string {
 	return parts.length ? parts.join("，") : "任何失败";
 }
 
-/** 文件读不了，或者内容有读不懂的地方：读不了也记成一处问题。 */
-function needsFix(settings: Settings): boolean {
-	return settings.config.problems.length > 0;
+/** 配置错误和非阻断的规则提醒都用 warning；是否能续跑仍由 config.problems 决定。 */
+function settingsNotice(settings: Settings, message: string): Notice {
+	const attention = settings.config.problems.length > 0 || configWarnings(settings.config).length > 0;
+	return { message, level: attention ? "warning" : "info" };
+}
+
+function ruleWarningSummary(config: Config): string | undefined {
+	const count = configWarnings(config).length;
+	return count ? `规则有 ${count} 处提醒，不影响设置生效` : undefined;
 }
 
 function usableRules(config: Config): number {
@@ -396,12 +414,9 @@ function usableRules(config: Config): number {
 // ── 运行中的通知 ──
 
 /**
- * 启动时值得说的事，最多一条：设置文件读不了或有问题，说是哪一份（关着也说，可能就是 enabled 写错了）；用上了项目级设置
- * （仓库里带的设置能让 onward 替你给模型发消息，要让人知道）；没有可用的规则。不写路径和报错原文，细节在
- * `/onward show`。pi 只留下连着的提示里的最后一条，分开发会互相顶掉。
- *
- * `quiet()` 为真时后两种不说，和 pi 的 quietStartup 一样只收起平常的；设置有问题照样警告，修好之前不会自动续跑。
- * 只在有平常的话要说时才问它。
+ * 启动时最多一条：配置错误说是哪一份（关着也说，可能就是 enabled 写错了）；规则提醒不阻止续跑。
+ * 两者都不受 quietStartup 影响。用上了项目级设置、没有可用规则这两种平常提示才问 quiet()。
+ * 不写路径和报错原文，细节用 `/onward show` 查看；pi 只留下连着的提示里的最后一条，分开发会互相顶掉。
  */
 export function startupNotice(settings: Settings, quiet: () => boolean): Notice | undefined {
 	const { config } = settings;
@@ -412,6 +427,8 @@ export function startupNotice(settings: Settings, quiet: () => boolean): Notice 
 	});
 	if (bad.length) return warning(`${STOPPED} onward：${bad.join("，")}，${UNTIL_FIXED}（${SEE_SHOW}）`);
 	const project = settings.file("project")?.source.kind === "file";
+	const reminders = ruleWarningSummary(config);
+	if (reminders) return warning(`onward：${project ? "用上了项目级设置；" : ""}${reminders}（${SEE_SHOW}）`);
 	const idle = config.enabled && !usableRules(config);
 	if (!(project || idle) || quiet()) return undefined;
 	if (project && idle)

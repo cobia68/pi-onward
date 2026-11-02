@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { matchFailure } from "../src/policy/config.ts";
+import { configWarnings, matchFailure } from "../src/policy/config.ts";
 import { DEFAULT_POLICY } from "../src/policy/policy.ts";
 import { parseConfig } from "./support/config.ts";
 import { empty, err } from "./support/fake-pi.ts";
@@ -60,6 +60,7 @@ test("example.json：解析无问题，顶层参数就是内置默认值，rules
 	const config = parseConfig(example);
 	assert.deepEqual(config.problems, []);
 	assert.deepEqual(config.defaults, { ...DEFAULT_POLICY });
+	assert.deepEqual(configWarnings(config), []);
 	assert.deepEqual(example.rules, commonRules().rules);
 	for (const rule of example.rules) {
 		if (rule.when) {

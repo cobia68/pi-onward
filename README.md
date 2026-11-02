@@ -85,6 +85,7 @@ pi install npm:@cobia/pi-onward
     },
     {
       "name": "everything-else",
+      "action": "message",
       "prompt": "上一步失败了（{error}），接着做，第 {attempt}/{max} 次"
     }
   ]
@@ -97,7 +98,8 @@ pi install npm:@cobia/pi-onward
 
 - **没有内置规则**。没写 `rules`，出错时什么都不做。顶层的参数只是规则没写时的默认值，本身不会触发续跑。
 - 按顺序第一条命中的生效，**没命中的失败不处理**。想兜底就在最后放一条不带 `when` 的规则。
-- 不写 `when.failure` 就不限制失败类型，不带 `when` 或写成 `"when": {}` 的兜底也会处理空回复。
+- 不写 `when.failure` 就不限制失败类型，空回复也在内。
+- 不带 `when` 或写成 `"when": {}` 时是所有失败的兜底，**必须显式写 `action`**，如 `{ "name": "fallback", "action": "message" }`；其他参数仍可继承。
 - `"action": "stop"` 的规则命中就停、只提醒，也挡住后面的兜底。适合额度用完这类重试没用的错误。
 - `enabled: false` 的规则保留但跳过。
 - 每条规则有自己的续跑次数；「同一个错误连续几次」不分规则，但用的是当前命中规则的上限。
@@ -124,7 +126,9 @@ pi install npm:@cobia/pi-onward
 
 `prompt` 里可以写 `{attempt}`（第几次）、`{max}`（最多几次）、`{error}`（失败摘要，空回复时是「空回复」）、`{rule}`（规则名）。
 
-**设置文件里有读不懂的地方，整份不生效**，修好之前不会自动续跑，启动时和 `/onward status` 都会提醒。拼错或不认识的键、超出范围的值、不是 `true` / `false` 的 `enabled`、重名的规则都算。不会只丢掉写坏的那部分、其余照跑：那样错误会落到更宽的规则或默认值上，比如写坏了的 `stop` 规则让额度错误落到兜底去续跑，多发真实请求。问题用 `/onward show` 查看，改完 `/onward reload`。设置文件不是合法 JSON、或者顶层不是对象时也一样；这时命令不会改写它，回复「未做任何修改」。有项目级设置时，两份里任何一份这样，都是整份不生效。
+前面的无条件兜底挡住后续失败规则，或规则显式写了当前动作不用的参数（如 `resend` 的 `prompt`、`stop` 的 `delay`），会在启动和 `/onward status` 提醒，细节见 `/onward show`。这些提醒不影响设置生效，也不受 `quietStartup` 影响；停用的规则、继承来的默认参数不参与这些提醒。
+
+**设置文件里有读不懂的地方，整份不生效**，修好之前不会自动续跑，启动时和 `/onward status` 都会提醒。拼错或不认识的键、超出范围的值、不是 `true` / `false` 的 `enabled`、重名的规则、兜底没写 `action` 都算。不会只丢掉写坏的那部分、其余照跑：那样错误会落到更宽的规则或默认值上，比如写坏了的 `stop` 规则让额度错误落到兜底去续跑，多发真实请求。问题用 `/onward show` 查看，改完 `/onward reload`。设置文件不是合法 JSON、或者顶层不是对象时也一样；这时命令不会改写它，回复「未做任何修改」。有项目级设置时，两份里任何一份这样，都是整份不生效。
 
 ### 项目级设置
 
@@ -139,9 +143,9 @@ pi install npm:@cobia/pi-onward
 
 ### 启动提示
 
-启动时 onward 最多说一句：用上了项目级设置、没有可用的规则，或者哪一份设置有问题。细节用 `/onward show` 查看。
+启动时 onward 最多说一句：用上了项目级设置、没有可用的规则、哪一份设置有问题，或者规则有提醒。细节用 `/onward show` 查看。
 
-- **跟着 pi 的 `quietStartup`**：pi 的 `settings.json` 里 `quietStartup` 是 `true` 或 `"header"` 时，前两种不说。设置有问题照样警告：修好之前不会自动续跑，和 pi 自己的启动警告一样不收起。
+- **跟着 pi 的 `quietStartup`**：pi 的 `settings.json` 里 `quietStartup` 是 `true` 或 `"header"` 时，前两种不说。设置有问题照样警告：修好之前不会自动续跑，和 pi 自己的启动警告一样不收起。规则提醒也不收起，但不影响设置生效。
 - **onward 自己的 `quietStartup`**：写在全局设置里，`true` 不显示，`false` 照常显示、不管 pi 的，不写时跟着 pi 的。可以用 `/onward set quietStartup=true` 改，`/onward unset quietStartup` 去掉。只能写在全局：项目级的一份写了算一处问题，免得别人的仓库关掉「用上了项目级设置」这句提醒。
 - `pi --verbose` 只让 pi 自己的启动信息照常显示，扩展读不到这个参数；要看 onward 的状态用 `/onward status`。
 

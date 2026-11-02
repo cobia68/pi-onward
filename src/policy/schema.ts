@@ -16,7 +16,8 @@ function param(item: Field, fallback?: unknown): Record<string, unknown> {
 	const choices = item.choices?.map((choice) => `${choice.value}：${choice.description}`).join("；");
 	// 写法是「文字」时不重复：类型已经是 string。
 	const syntax = item.syntax === "文字" ? "" : `（${item.syntax}）`;
-	const what = choices ? `${item.description}。${choices}` : `${item.description}${syntax}`;
+	const usage = item.appliesTo ? `。仅在 action 为 ${item.appliesTo.join(" 或 ")} 时使用` : "";
+	const what = (choices ? `${item.description}。${choices}` : `${item.description}${syntax}`) + usage;
 	return {
 		description: fallback === undefined ? `${what}。覆盖顶层的同名字段` : what,
 		...item.schema,
@@ -56,8 +57,10 @@ export function configSchema(): Record<string, unknown> {
 		},
 		$defs: {
 			rule: {
+				description: "规则需要匹配条件或显式动作；不写 when 或写成 {} 的失败兜底必须显式写 action",
 				type: "object",
 				additionalProperties: false,
+				anyOf: [{ required: ["action"] }, { required: ["when"], properties: { when: { minProperties: 1 } } }],
 				properties: {
 					name: {
 						description: "规则名，出现在通知里，不能重名；不写时按位置叫 rule-1、rule-2",
@@ -70,7 +73,8 @@ export function configSchema(): Record<string, unknown> {
 				},
 			},
 			when: {
-				description: "命中条件，几项都要满足；不写 failure 就不限制失败类型",
+				description:
+					"命中条件，几项都要满足；不写 failure 就不限制失败类型；不写 when 或写成 {} 时必须显式写 action",
 				type: "object",
 				additionalProperties: false,
 				properties: {

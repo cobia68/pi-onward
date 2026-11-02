@@ -17,7 +17,7 @@
  */
 import { type AgentMessage, type Failure, isFailure } from "./failure.ts";
 import { FIELD_NAMES, type Policy, type PolicyPatch, readParams, resolvePolicy } from "./policy.ts";
-import { findRule, parseRules, type Rule } from "./rules.ts";
+import { findRule, parseRules, type Rule, ruleWarnings } from "./rules.ts";
 
 export interface Config {
 	enabled: boolean;
@@ -90,6 +90,11 @@ export function mergeLayers(layers: readonly ConfigLayer[]): Config {
 /** 开着，并且设置里没有读不懂的内容。 */
 export function isActive(config: Config): boolean {
 	return config.enabled && config.problems.length === 0;
+}
+
+/** 只诊断合并后实际采用的规则；有配置错误时先修错，不对部分解析结果给提醒。 */
+export function configWarnings(config: Config): string[] {
+	return config.problems.length ? [] : ruleWarnings(config.rules, config.defaults);
 }
 
 /** 写回设置文件时的键顺序：`$schema`、`enabled`、参数、`quietStartup`、其他、`rules`。 */

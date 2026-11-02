@@ -16,7 +16,7 @@ test("pi 的 quietStartup 是 true 或 header 时，启动不说平常的；设�
 		await start(h);
 		assert.deepEqual(h.notes, [], String(quietStartup));
 		const project = harness({
-			config: { rules: [{ name: "any" }] },
+			config: { rules: [{ name: "any", action: "message" }] },
 			project: { maxRetries: 2 },
 			piSettings: { quietStartup },
 		});
@@ -43,7 +43,7 @@ test("onward 自己的 quietStartup 写了就按它，不管 pi 的", async () =
 });
 
 test("项目级设置不能写 quietStartup：别人的仓库关不掉「用上了项目级设置」这句提醒", async () => {
-	const h = harness({ config: { rules: [{ name: "any" }] }, project: { quietStartup: true } });
+	const h = harness({ config: { rules: [{ name: "any", action: "message" }] }, project: { quietStartup: true } });
 	await start(h);
 	assert.deepEqual(h.warnings(), ["🛑 onward：项目级设置有 1 处问题，修好之前不会自动续跑（/onward show 查看）"]);
 	assert.match(await h.command("--scope project show"), /^- quietStartup 只能写在全局设置$/m);
@@ -59,21 +59,21 @@ test("项目级设置不能写 quietStartup：别人的仓库关不掉「用上�
 });
 
 test("set、unset quietStartup：只改全局，回复说启动提示现在怎么显示；reset 也去掉它", async () => {
-	const h = harness({ config: { rules: [{ name: "any" }] } });
+	const h = harness({ config: { rules: [{ name: "any", action: "message" }] } });
 	await start(h);
 	assert.match(
 		await h.command("set quietStartup=true"),
 		/^⏩ onward：开，1 条规则生效\nonward 的启动提示不显示；设置有问题时照样警告\n/,
 	);
-	assert.deepEqual(read(h.configPath), { quietStartup: true, rules: [{ name: "any" }] });
+	assert.deepEqual(read(h.configPath), { quietStartup: true, rules: [{ name: "any", action: "message" }] });
 	assert.match(await h.command("--scope global show"), /^全局设置 \S+\n {2}quietStartup {2}true\n/);
 	assert.match(await h.command("set quietStartup=false"), /\nonward 的启动提示照常显示，不管 pi 的 quietStartup\n/);
 	assert.match(await h.command("set quietStartup=yes"), /^onward：quietStartup 需要 true 或 false。未做任何修改/);
 	assert.match(await h.command("unset quietStartup"), /\nonward 的启动提示跟着 pi 的 quietStartup\n/);
-	assert.deepEqual(read(h.configPath), { rules: [{ name: "any" }] });
+	assert.deepEqual(read(h.configPath), { rules: [{ name: "any", action: "message" }] });
 	await h.command("set quietStartup=true maxRetries=3");
 	assert.match(await h.command("reset"), /^⏩ onward：开，1 条规则生效\n已恢复默认，手写的 rules 保留\n/);
-	assert.deepEqual(read(h.configPath), { rules: [{ name: "any" }] });
+	assert.deepEqual(read(h.configPath), { rules: [{ name: "any", action: "message" }] });
 	assert.deepEqual(parseCommand("set quietStartup=true"), {
 		kind: "update",
 		scope: "global",
