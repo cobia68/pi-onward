@@ -1,43 +1,36 @@
-/**
- * 规则 = 条件（when）+ 参数，按顺序第一条命中的生效。参数和设置文件顶层同名，只写和顶层不同的。
- * when.failure 统一用正则匹配失败文本：普通错误用原文，空回复用空串；不写就不限制失败类型。
- * 没有内置规则：没写或没命中，都不处理。无条件兜底必须显式写 action；读不懂的内容让整份设置不生效（见 config.ts）。
- * 遮挡和不适用的显式参数单独提醒，不影响设置生效，也不改变规则顺序。
- */
+/** First matching rule wins. Within it, select the last stage whose inclusive threshold has been reached. */
+import { ACTION_NAME_PATTERN, type ActionCall } from "../actions/protocol.ts";
 import { errorText, isRecord } from "../util.ts";
+import { type Delay, parseDelay } from "./delay.ts";
 import { type Failure, failureText } from "./failure.ts";
-import { FIELD_NAMES, FIELDS, type PolicyPatch, readParams, resolvePolicy } from "./policy.ts";
 
 export interface RuleWhen {
-	/** 大小写不敏感，对统一的失败文本匹配；读设置时编译一次。 */
 	failure?: RegExp;
-	/** 通配，只有 `*` 有特殊含义。 */
 	provider?: string;
 	model?: string;
 }
-
+export interface Stage {
+	minFailures: number;
+	delay: Delay;
+	action: ActionCall;
+}
 export interface Rule {
 	name: string;
 	enabled: boolean;
 	when: RuleWhen;
-	/** 规则自己写的参数，只覆盖写了的字段。 */
-	patch: PolicyPatch;
+	stages: Stage[];
 }
-
-export const RULE_KEYS: ReadonlySet<string> = new Set(["name", "enabled", "when", ...FIELD_NAMES]);
-
+export const RULE_KEYS = new Set(["name", "enabled", "when", "stages"]);
 export function findRule(rules: readonly Rule[], failure: Failure): Rule | undefined {
 	return rules.find((rule) => rule.enabled && matches(rule.when, failure));
 }
-
 function matches(when: RuleWhen, failure: Failure): boolean {
-	if (when.failure !== undefined && !when.failure.test(failureText(failure))) return false;
-	if (when.provider !== undefined && !glob(when.provider, failure.provider)) return false;
-	if (when.model !== undefined && !glob(when.model, failure.model)) return false;
-	return true;
+	return (
+		(when.failure === undefined || when.failure.test(failureText(failure))) &&
+		(when.provider === undefined || glob(when.provider, failure.provider)) &&
+		(when.model === undefined || glob(when.model, failure.model))
+	);
 }
-
-/** 大小写不敏感，整串匹配。 */
 export function glob(pattern: string, value: string): boolean {
 	const source = pattern
 		.split("*")
@@ -45,104 +38,134 @@ export function glob(pattern: string, value: string): boolean {
 		.join(".*");
 	return new RegExp(`^${source}$`, "i").test(value);
 }
-
-/** 省略或空的 when 是无条件失败兜底；不猜测正则或通配条件的覆盖关系。 */
-function isFallbackWhen(when: unknown): boolean {
-	return when === undefined || (isRecord(when) && Object.keys(when).length === 0);
+export function selectStage(rule: Rule, failures: number): Stage {
+	for (let index = rule.stages.length - 1; index >= 0; index--) {
+		const stage = rule.stages[index]!;
+		if (stage.minFailures <= failures) return stage;
+	}
+	throw new Error("No recovery stage covers the current failure count");
 }
-
-/** 按合并后的参数诊断启用的规则；提醒不进入 problems，调用方不因此停用设置。 */
-export function ruleWarnings(rules: readonly Rule[], defaults: PolicyPatch): string[] {
-	const warnings: string[] = [];
+export function ruleWarnings(rules: readonly Rule[]): string[] {
 	let fallback: string | undefined;
-	for (const [index, rule] of rules.entries()) {
+	const warnings: string[] = [];
+	for (const rule of rules) {
 		if (!rule.enabled) continue;
-		const label = `rules[${index}]（${rule.name}）`;
-		if (fallback !== undefined) warnings.push(`${label}被前面的兜底规则「${fallback}」挡住，不会命中`);
-		if (fallback === undefined && isFallbackWhen(rule.when)) fallback = rule.name;
-		const { action } = resolvePolicy(defaults, rule.patch);
-		const unused = FIELDS.filter(
-			(item) => Object.hasOwn(rule.patch, item.name) && item.appliesTo && !item.appliesTo.includes(action),
-		).map((item) => item.name);
-		if (unused.length) warnings.push(`${label}的 ${unused.join("、")} 在 action=${action} 时不使用`);
+		if (fallback)
+			warnings.push(`Rule "${rule.name}" is shadowed by earlier catch-all rule "${fallback}" and cannot match`);
+		if (!fallback && !Object.keys(rule.when).length) fallback = rule.name;
 	}
 	return warnings;
 }
-
-/** 校验规则列表：读得懂的规则返回，读不懂的地方逐条记进 problems。 */
 export function parseRules(raw: unknown, problems: string[]): Rule[] {
-	if (raw === undefined) return [];
 	if (!Array.isArray(raw)) {
-		problems.push("rules 需要数组");
+		problems.push("rules must be an array");
 		return [];
 	}
 	const rules: Rule[] = [];
-	for (const [index, item] of raw.entries()) {
-		const rule = parseRule(item, index, problems);
-		if (!rule) continue;
-		if (rules.some((r) => r.name === rule.name)) problems.push(`rules[${index}] 与前面的规则重名（${rule.name}）`);
-		else rules.push(rule);
+	for (const [index, value] of raw.entries()) {
+		const label = `rules[${index}]`;
+		if (!isRecord(value)) {
+			problems.push(`${label} must be an object`);
+			continue;
+		}
+		const before = problems.length;
+		unknownKeys(value, RULE_KEYS, label, problems);
+		const name = value.name === undefined ? `rule-${index + 1}` : value.name;
+		if (typeof name !== "string" || !name.trim()) problems.push(`${label}.name must be a non-empty string`);
+		if (value.enabled !== undefined && typeof value.enabled !== "boolean")
+			problems.push(`${label}.enabled must be true or false`);
+		const when = parseWhen(value.when, `${label}.when`, problems);
+		const stages = parseStages(value.stages, `${label}.stages`, problems);
+		if (problems.length !== before || typeof name !== "string") continue;
+		if (rules.some((rule) => rule.name === name.trim()))
+			problems.push(`${label}.name duplicates an earlier rule name`);
+		else rules.push({ name: name.trim(), enabled: value.enabled !== false, when, stages });
 	}
 	return rules;
 }
-
-/** 一处读不懂就不返回这条规则，所有问题都记下来，一次改完。 */
-function parseRule(raw: unknown, index: number, problems: string[]): Rule | undefined {
-	if (!isRecord(raw)) {
-		problems.push(`rules[${index}] 不是对象`);
-		return undefined;
+function parseStages(raw: unknown, label: string, problems: string[]): Stage[] {
+	if (!Array.isArray(raw) || !raw.length) {
+		problems.push(`${label} must be a non-empty array`);
+		return [];
 	}
-	const before = problems.length;
-	const name = ruleName(raw.name, index);
-	if (name === undefined) problems.push(`rules[${index}].name 需要非空文字`);
-	const label = name === undefined ? `rules[${index}].` : `rules[${index}]（${name}）.`;
-	if (raw.enabled !== undefined && typeof raw.enabled !== "boolean")
-		problems.push(`${label}enabled 需要 true 或 false`);
-	const when = parseWhen(raw.when, `${label}when`, problems);
-	const patch = readParams(raw, label, problems);
-	if (isFallbackWhen(raw.when) && raw.action === undefined)
-		problems.push(`${label}action 不能省略：兜底规则需要明确写 message、resend 或 stop`);
-	for (const key of Object.keys(raw)) if (!RULE_KEYS.has(key)) problems.push(`${label}${key} 不认识`);
-	// name 是 undefined 时已经记过问题，后一个条件只为收窄类型。
-	if (problems.length > before || name === undefined) return undefined;
-	return { name, enabled: raw.enabled !== false, when, patch };
+	const stages: Stage[] = [];
+	let previous = 0;
+	for (const [index, value] of raw.entries()) {
+		const at = `${label}[${index}]`;
+		if (!isRecord(value)) {
+			problems.push(`${at} must be an object`);
+			continue;
+		}
+		const before = problems.length;
+		unknownKeys(value, new Set(["minFailures", "delay", "action"]), at, problems);
+		const minFailures = value.minFailures;
+		if (!Number.isSafeInteger(minFailures) || (minFailures as number) < 1 || (minFailures as number) > 1000)
+			problems.push(`${at}.minFailures must be an integer between 1 and 1000`);
+		else {
+			if (index === 0 && minFailures !== 1) problems.push(`${at}.minFailures must be 1 for the first stage`);
+			if ((minFailures as number) <= previous) problems.push(`${at}.minFailures must be strictly increasing`);
+			previous = minFailures as number;
+		}
+		const delay =
+			value.delay === undefined
+				? parseDelay("0s")
+				: typeof value.delay === "string"
+					? parseDelay(value.delay)
+					: "must be a delay string with units";
+		if (typeof delay === "string") problems.push(`${at}.delay ${delay}`);
+		const action = value.action;
+		if (!isRecord(action)) {
+			problems.push(`${at}.action must be an object with "use" and optional "with"`);
+			continue;
+		}
+		unknownKeys(action, new Set(["use", "with"]), `${at}.action`, problems);
+		if (typeof action.use !== "string" || !new RegExp(ACTION_NAME_PATTERN).test(action.use))
+			problems.push(`${at}.action.use must be a qualified action name such as onward.resend`);
+		if (action.with !== undefined && !isRecord(action.with)) problems.push(`${at}.action.with must be an object`);
+		if (problems.length === before && typeof delay !== "string")
+			stages.push({
+				minFailures: minFailures as number,
+				delay,
+				action: {
+					use: action.use as string,
+					...(action.with === undefined ? {} : { with: structuredClone(action.with) as Record<string, unknown> }),
+				},
+			});
+	}
+	return stages;
 }
-
-/** 没写名字时按位置叫 `rule-1`、`rule-2`；写了但不是非空文字时返回 undefined。 */
-function ruleName(raw: unknown, index: number): string | undefined {
-	if (raw === undefined) return `rule-${index + 1}`;
-	return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
-}
-
-/** 读得懂的条件；读不懂的记进 problems。`where` 如 `rules[2]（auth）.when`。 */
-function parseWhen(raw: unknown, where: string, problems: string[]): RuleWhen {
+function parseWhen(raw: unknown, label: string, problems: string[]): RuleWhen {
+	if (raw === undefined) return {};
+	if (!isRecord(raw)) {
+		problems.push(`${label} must be an object`);
+		return {};
+	}
 	const when: RuleWhen = {};
-	if (raw === undefined) return when;
-	if (!isRecord(raw)) {
-		problems.push(`${where} 需要对象`);
-		return when;
-	}
-	for (const [key, value] of Object.entries(raw)) {
-		switch (key) {
-			case "failure":
-				if (typeof value !== "string" || !value) {
-					problems.push(`${where}.failure 需要非空正则字符串；空回复用 ^$，所有失败用 .*`);
-					break;
-				}
-				try {
-					when.failure = new RegExp(value, "i");
-				} catch (error: unknown) {
-					problems.push(`${where}.failure 不是合法正则（${errorText(error)}）`);
-				}
-				break;
-			case "provider":
-			case "model":
-				if (typeof value === "string" && value.trim()) when[key] = value.trim();
-				else problems.push(`${where}.${key} 需要非空字符串`);
-				break;
-			default:
-				problems.push(`${where}.${key} 不认识`);
+	unknownKeys(raw, new Set(["failure", "provider", "model"]), label, problems);
+	for (const key of ["failure", "provider", "model"] as const) {
+		const value = raw[key];
+		if (value === undefined) continue;
+		if (typeof value !== "string" || !value.trim()) {
+			problems.push(`${label}.${key} must be a non-empty string`);
+			continue;
+		}
+		if (key !== "failure") when[key] = value.trim();
+		else {
+			try {
+				when.failure = new RegExp(value, "i");
+			} catch (error) {
+				problems.push(`${label}.failure is not a valid regular expression (${errorText(error)})`);
+			}
 		}
 	}
 	return when;
+}
+export function unknownKeys(
+	raw: Record<string, unknown>,
+	allowed: ReadonlySet<string>,
+	label: string,
+	problems: string[],
+): void {
+	for (const key of Object.keys(raw))
+		if (!allowed.has(key)) problems.push(`${label ? `${label}.` : ""}${key} is not a recognized field`);
 }

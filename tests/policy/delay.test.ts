@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { delayText, formatDelay, parseDelay, retryDelay, totalDelay } from "../../src/policy/delay.ts";
+import { delayText, formatDelay, parseDelay, retryDelay } from "../../src/policy/delay.ts";
 
 const ramp = { kind: "ramp", step: 3_000, cap: 15_000 } as const;
 
@@ -10,8 +10,6 @@ test("按次增长并封顶：3s..15s 是 3s → 6s → 9s → 12s → 15s → 1
 		[1, 2, 3, 4, 5, 6, 10].map((n) => retryDelay(n, ramp)),
 		[3_000, 6_000, 9_000, 12_000, 15_000, 15_000, 15_000],
 	);
-	assert.equal(totalDelay(10, ramp), 120_000);
-	assert.equal(totalDelay(50, ramp), 30_000 + 46 * 15_000);
 });
 
 test("列表按顺序等，最后一个值重复；一个值就是每次都等这么久", () => {
@@ -26,9 +24,12 @@ test("列表按顺序等，最后一个值重复；一个值就是每次都等�
 });
 
 test("每个值都要带单位，超过一小时、写反了的起步封顶、太长的列表都不收", () => {
-	for (const bad of ["5", "5s,10", "", "5x", "61m", "15s..3s", "0s..15s", "3s..", "..15s", "3s..15s..20s"])
-		assert.equal(typeof parseDelay(bad), "string", bad);
-	assert.match(parseDelay(Array(21).fill("1s").join(",")) as string, /最多 20 个/);
+	for (const bad of ["5", "5s,10", "", "5x", "61m", "15s..3s", "0s..15s", "3s..", "..15s", "3s..15s..20s"]) {
+		const problem = parseDelay(bad);
+		assert.ok(typeof problem === "string", bad);
+		assert.doesNotMatch(problem, /\p{Script=Han}/u);
+	}
+	assert.match(parseDelay(Array(21).fill("1s").join(",")) as string, /at most 20/);
 });
 
 test("写回的样子和给人看的样子", () => {

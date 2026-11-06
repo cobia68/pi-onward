@@ -1,22 +1,10 @@
-/**
- * `/onward <动作> [参数]`：动作在前，参数写成 `字段=值`，字段名和设置文件一样。动作、字段、取值和选项都区分大小写，
- * 和设置文件、pi 自己的命令名一样。`set` 全有或全无：任何一项不合法就一项都不写。不写动作时弹出菜单，标明当前状态和修改目标。
- *
- * `--help` 是结束：写在哪都只显示帮助、不执行，跟在动作后面时显示这个动作的帮助。补全在每个动作后面都给它，
- * 写了它之后什么都不再给，后面有没有空格都一样。
- *
- * 看或改哪一份设置文件由 `--scope <global|project>` 定，和 wecom-aibot 的 `config --scope <层> <动作>` 一样写在动作前：
- * `/onward --scope project set maxRetries=3`，也可以写成 `--scope=project`。改设置的动作（on、off、set、unset、reset）
- * 不写就是全局，和 pi 的 `install`、`config` 不加 `--local` 时一样：同一条命令总是写同一个文件，仓库里的文件要写明才改。
- * show 不写时看合并后的结果，写了只看那一份写了什么。写在动作后不执行，报错给出正确的写法；只写 `--scope` 不写动作时，
- * 弹出这一份的菜单，`/onward` 的菜单里也有进到每一份的项。
- */
+/** 修改默认写全局，查询默认看合并结果；set 先全部校验，--help 不执行修改。 */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isActive } from "../policy/config.ts";
-import { DEFAULT_POLICY, FIELD_NAMES, FIELDS, type Field, fieldNamed } from "../policy/policy.ts";
-import type { Onward } from "./onward.ts";
+import { DEFAULT_LIMITS, FIELD_NAMES, FIELDS, type Field, fieldNamed } from "../policy/policy.ts";
+import type { Recovery } from "../runtime/recovery.ts";
 import { COMMAND_KEYS, SCOPES, type Scope, type Settings, type SettingsChange } from "./settings.ts";
 import {
+	actionsNotice,
 	COMMAND,
 	changedNotice,
 	columns,
@@ -26,26 +14,20 @@ import {
 	layerNotice,
 	menuTitle,
 	type Notice,
-	quietLine,
-	resetLine,
+	reloadNotice,
 	rulesNotice,
 	SCOPE,
 	say,
-	scopeLine,
 	section,
-	shadowLine,
 	showNotice,
 	statusNotice,
 	table,
+	toggleNotice,
 } from "./text.ts";
 
-/**
- * `topic`：帮助或出错是关于哪个动作的，没有时是总帮助。`choose`：没写动作，弹菜单；写了 `--scope` 时只列改这一份的。
- * `scope`：改哪一份设置文件。
- */
 export type Command =
 	| { kind: "choose"; scope?: Scope }
-	| { kind: "status" | "reload" }
+	| { kind: "status" | "reload" | "actions" }
 	| { kind: "reset"; scope: Scope }
 	| { kind: "help"; topic?: string }
 	| { kind: "show"; rules: boolean; scope?: Scope }
@@ -53,9 +35,7 @@ export type Command =
 	| { kind: "error"; message: string; topic?: string };
 
 const HELP = "--help";
-/** 启动提示的开关：不是规则的参数，只能写在全局设置。 */
 const QUIET = "quietStartup";
-/** 帮助的字段表里 quietStartup 那一行。 */
 const QUIET_HELP: [string, string] = [
 	QUIET,
 	[
@@ -66,61 +46,78 @@ const QUIET_HELP: [string, string] = [
 	].join("\n"),
 ];
 
-/** 改设置的动作的帮助里都有这一行。不写路径：设置文件放在哪只由 index.ts 决定，实际的路径在 status 里。 */
-const SCOPE_HELP = `${SCOPE} 写在动作前：不写或 global 改全局设置，project 改当前目录的项目级设置；两份在哪见 /${COMMAND} status`;
-/** 去掉参数的动作：去掉之后按什么走。 */
+const SCOPE_HELP = `${SCOPE} 写在动作前：不写或 global 改全局设置，project 改 Pi 已信任的当前项目设置；两份在哪见 /${COMMAND} show`;
 const SCOPE_FALLBACK = "去掉之后继承下一层：项目级的退回全局，全局的退回内置默认值";
 
 interface ActionSpec {
 	name: string;
-	/** 动作后面参数的写法；没有参数时为空。 */
 	args: string;
-	/** 一句话：总帮助和补全里用。 */
 	description: string;
-	/** 这个动作的帮助里多说的。 */
 	details: readonly string[];
-	/** 帮助里列出字段表：set、unset。 */
+	/** 是否在帮助中列出配置字段。 */
 	fields?: boolean;
-	/** 前面能写 --scope：`write` 改这一份，`read` 只看这一份。 */
+	/** 是否允许 --scope；区分读配置与写配置。 */
 	scoped?: "write" | "read";
 	examples?: readonly string[];
 }
 
-/** 每个动作：参数的写法和作用。帮助、补全都从这张表来。 */
+/** 命令、帮助、菜单与补全共用的动作定义。 */
 const ACTIONS: readonly ActionSpec[] = [
+	{
+		name: "actions",
+		args: "",
+		description: "查看已加载的恢复动作",
+		details: ["列出动作名称、执行阶段、支持的运行模式和说明", "注册失败的动作另列诊断；未引用的坏动作不阻断当前配置"],
+	},
 	{
 		name: "status",
 		args: "",
-		description: "现在会不会续跑、规则没写的参数、设置文件",
+		description: "查看当前状态",
 		details: [
-			"第一行说现在会不会续跑；正在续跑时下一行是进度",
-			"下面是规则没写的参数（做法、上限、间隔），以及全局、项目级设置文件在哪",
-			`设置文件有问题时只说有几处，详情用 /${COMMAND} show`,
+			"显示自动续跑开关和当前运行状态；待命时显示可用规则数，没有续跑记录时不显示零计数",
+			"显示连续失败次数、已启动续跑次数、当前恢复阶段和动作结果",
+			"从第几次失败进入哪个阶段由 rules[].stages 决定，规则切换不清零",
+			"超过 maxFailures 停止；原生接管受 maxHandoffs 限制",
+			`默认参数、规则详情和设置文件位置见 /${COMMAND} show`,
+			`配置有问题时只显示原因摘要，详情用 /${COMMAND} show；停止时显示原因和处理提示`,
 		],
 	},
 	{
 		name: "on",
 		args: "",
-		description: "打开",
-		details: ["在设置文件里写 enabled: true", `设置文件有问题时打开了也不续跑：先改好，再 /${COMMAND} reload`],
+		description: "启用自动续跑",
+		details: [
+			"在设置文件里写 enabled: true",
+			"成功后只确认启用结果和配置范围；当前仍不能续跑时补充原因",
+			`设置文件有问题时打开了也不续跑：先改好，再 /${COMMAND} reload`,
+			"启用开关会取消当前恢复并清零，不立即发起恢复",
+			"保存失败时明确提示；本次运行保留配置修改，重新加载或重启后以原文件为准",
+		],
 		scoped: "write",
 	},
 	{
 		name: "off",
 		args: "",
-		description: "关掉",
-		details: ["在设置文件里写 enabled: false", "正在等的续跑立刻打断，计数清零"],
+		description: "停用自动续跑",
+		details: [
+			"在设置文件里写 enabled: false",
+			"成功后只确认停用结果和配置范围；项目级仍启用时说明覆盖关系",
+			"成功修改配置会取消等待、待执行动作并清零计数",
+			"保存失败时明确提示；本次运行保留配置修改，重新加载或重启后以原文件为准",
+		],
 		scoped: "write",
 	},
 	{
 		name: "show",
 		args: "[rules]",
-		description: "各项参数和来源、规则、设置文件里的问题；rules 只看规则",
+		description: "查看配置参数、来源和规则",
 		details: [
-			"每个参数的值，以及它来自全局设置、项目级设置还是内置默认值",
-			"规则按顺序列出，第一条命中的生效；停用的标出来",
-			"设置文件有问题时不列规则，只列问题",
-			`写了 ${SCOPE} 时只看那一份设置文件写了什么，不合并、不填默认值`,
+			"查看当前已加载的配置：开关与启动提示、恢复上限、规则及来源、配置文件位置",
+			"参数标明来源及未保存的字段；项目级 rules 整份替换全局规则，不拼接",
+			"show rules 只显示规则；按顺序列出，第一条命中的生效，停用的标出来",
+			"配置无效时只列具体问题和文件位置，不展示部分参数或规则",
+			`写了 ${SCOPE} 时只看本层显式配置，不合并、不填默认值；未写 rules 与显式空列表不同`,
+			`手改文件后 /${COMMAND} reload；show 本身不重载、不写配置`,
 		],
 		scoped: "read",
 		examples: [`/${COMMAND} show rules`, `/${COMMAND} ${SCOPE} project show`],
@@ -128,83 +125,98 @@ const ACTIONS: readonly ActionSpec[] = [
 	{
 		name: "set",
 		args: "字段=值 …",
-		description: "改设置文件顶层的参数，规则没写的字段用它；一项不合法就都不改",
+		description: "修改配置参数",
 		details: [
 			"可以一次写几个：先全部检查，有一项不合法就一项都不改，问题一起说",
-			'值里有空格时加双引号：prompt="接着做，第 {attempt} 次"',
+			"成功后只回显本次修改值和目标范围；项目级覆盖与当前不可用原因另行说明",
+			"修改恢复过程的上限、动作执行时限和全局 quietStartup",
+			"写入失败时本次运行保留配置修改，重新加载或重启后以原文件为准",
+			"修改配置会取消当前恢复过程",
 			`rules 只能在设置文件里手写，改完 /${COMMAND} reload；开关用 /${COMMAND} on、off`,
 		],
 		fields: true,
 		scoped: "write",
 		examples: [
-			`/${COMMAND} set action=resend maxRetries=20 delay=5s,10s,30s`,
-			`/${COMMAND} set prompt="接着做 {error}"`,
-			`/${COMMAND} ${SCOPE} project set maxRetries=3`,
+			`/${COMMAND} set maxFailures=20 actionTimeout=30s`,
+			`/${COMMAND} set maxHandoffs=2`,
+			`/${COMMAND} ${SCOPE} project set maxFailures=3`,
 		],
 	},
 	{
 		name: "unset",
 		args: "字段 …",
-		description: "去掉开关或参数，继承下一层",
+		description: "移除指定配置项",
 		details: [
 			"可以一次写几个，开关 enabled、启动提示 quietStartup 也能去掉；有不认识或写了两次的字段就一项都不改",
-			"规则里写的同名字段不受影响",
+			"规则中的阶段与动作不受影响",
+			"成功后说明移除后当前采用的值和来源；配置无效时不展示继承值",
+			"写入失败时本次运行保留配置修改，重新加载或重启后以原文件为准",
 			SCOPE_FALLBACK,
 		],
 		fields: true,
 		scoped: "write",
-		examples: [`/${COMMAND} unset delay maxRetries`, `/${COMMAND} ${SCOPE} project unset enabled`],
+		examples: [`/${COMMAND} unset maxFailures actionTimeout`, `/${COMMAND} ${SCOPE} project unset enabled`],
 	},
 	{
 		name: "reload",
 		args: "",
-		description: "重新读设置文件（手改 rules 之后用）",
-		details: ["全局、项目级都重读，读完显示和 status 一样的状态", "读到关着或有问题的设置时，正在等的续跑立刻打断"],
+		description: "重新加载配置",
+		details: [
+			"丢弃未保存修改，重读配置；项目级仅在绑定且受信任时读取，会话开始前只读全局",
+			`成功时确认读取范围；配置无效时说明原因摘要，详情见 /${COMMAND} show`,
+			"重载会取消等待、待执行动作和本轮计数，不主动发起恢复",
+		],
 	},
 	{
 		name: "reset",
 		args: "",
-		description: "去掉开关和参数，保留手写的 rules",
+		description: "重置配置参数，保留规则",
 		details: [
 			"开关、参数和 quietStartup 都去掉；rules 和其他手写的内容留着",
-			"正在等的续跑立刻打断，计数清零",
+			"反馈确认重置范围和保留内容，不把重置某一层说成整个项目恢复内置默认值",
+			"正在等的续跑立刻打断，运行状态和计数清零；即使目标配置无法读取或保存也一样",
+			"写入失败时本次运行保留配置修改，重新加载或重启后以原文件为准",
 			SCOPE_FALLBACK,
 		],
 		scoped: "write",
 	},
 ];
 
-const DESCRIPTION = `出错后按规则自动续跑（不写动作时弹出菜单，${HELP} 查看用法）`;
+const DESCRIPTION = "控制自动续跑，查看状态和配置";
 
-export function registerCommand(pi: ExtensionAPI, settings: Settings, onward: Onward): void {
+export function registerCommand(pi: ExtensionAPI, settings: Settings, onward: Recovery): void {
 	pi.registerCommand(COMMAND, {
 		description: DESCRIPTION,
 		getArgumentCompletions: (prefix) => completeArguments(prefix),
 		handler: async (args, ctx) => {
+			if (args.startsWith("_dispatch ")) {
+				await onward.dispatch(args.slice(10), ctx);
+				return;
+			}
 			let command = parseCommand(args);
-			// 菜单里选了「--scope <层> …」时接着弹这一份的菜单；这一份的菜单里不再有这种项。
+			// 选中作用域后继续进入该层菜单。
 			while (command.kind === "choose") {
-				const picked = await choose(ctx, settings, command.scope);
+				const picked = await choose(ctx, settings, onward, command.scope);
 				if (picked === undefined) return;
 				command = parseCommand(picked);
 			}
 			const notice = execute(command, settings, onward, ctx);
-			// 不管是命令关的、还是 reload 读到手改的关或有问题的设置，不生效了就不该还有等着的续跑。
-			if (!isActive(settings.config)) onward.stop(ctx);
 			say(ctx, notice);
 		},
 	});
 }
 
-/**
- * `/onward` 不写动作：弹出菜单，标明当前状态和修改目标。返回选中的命令；要写参数的（set、unset）填进输入框接着写，
- * 返回 undefined。写了 `--scope` 时只列改这一份的动作，选中的命令带着它。没有界面时不弹，什么都不做。
- */
-async function choose(ctx: ExtensionContext, settings: Settings, scope?: Scope): Promise<string | undefined> {
+/** 必填参数的动作只填入编辑器；其余返回可执行命令。 */
+async function choose(
+	ctx: ExtensionContext,
+	settings: Settings,
+	onward: Recovery,
+	scope?: Scope,
+): Promise<string | undefined> {
 	if (!ctx.hasUI) return undefined;
 	const items = menuItems(scope);
 	const label = await ctx.ui.select(
-		menuTitle(settings, scope),
+		menuTitle(settings, scope, onward.status().state),
 		items.map((item) => item.label),
 	);
 	const picked = items.find((item) => item.label === label);
@@ -213,11 +225,6 @@ async function choose(ctx: ExtensionContext, settings: Settings, scope?: Scope):
 	return undefined;
 }
 
-/**
- * 每个动作一项，再是进到每一份设置的菜单的 `--scope <层> …`，最后是 --help；和帮助里的动作表一样只写名字，参数留给
- * 各自动作的帮助。`fill`：参数非写不可。写了 `scope` 时是这一份的菜单：只列能写 --scope 的动作，`input` 带上
- * `--scope <scope>`。
- */
 export function menuItems(scope?: Scope): { label: string; input: string; fill: boolean }[] {
 	const actions = scope ? ACTIONS.filter((item) => item.scoped) : ACTIONS;
 	const layers = scope ? [] : SCOPES;
@@ -244,12 +251,16 @@ export function menuItems(scope?: Scope): { label: string; input: string; fill: 
 function execute(
 	command: Exclude<Command, { kind: "choose" }>,
 	settings: Settings,
-	onward: Onward,
+	onward: Recovery,
 	ctx: ExtensionContext,
 ): Notice {
+	// Read-only queries never change the recovery state.
+	const status = () => onward.status();
 	switch (command.kind) {
+		case "actions":
+			return actionsNotice(onward.registry.list(), onward.registry.diagnostics);
 		case "status":
-			return statusNotice(settings, onward.progress());
+			return statusNotice(settings, status());
 		case "help":
 			return info(helpText(command.topic));
 		case "error":
@@ -259,40 +270,25 @@ function execute(
 			return command.rules ? rulesNotice(settings) : showNotice(settings);
 		case "reload":
 			settings.reload();
-			return statusNotice(settings, onward.progress());
-		case "reset": {
 			onward.stop(ctx);
+			return reloadNotice(settings, status());
+		case "reset": {
 			const saved = settings.reset(command.scope);
-			const kept = saved.kind === "saved" && Array.isArray(saved.value.rules) && saved.value.rules.length > 0;
-			const done = note(resetLine(command.scope, kept), shadowLine(settings, command.scope, COMMAND_KEYS));
-			return changedNotice(saved, settings, onward.progress(), done);
+			onward.stop(ctx);
+			return changedNotice(saved, settings, status(), { action: "reset", scope: command.scope, keys: COMMAND_KEYS });
 		}
 		case "update": {
 			const saved = settings.update(command.scope, command.change);
-			const keys = changedKeys(command.change);
-			const done = note(
-				scopeLine(command.scope),
-				keys.includes(QUIET) ? quietLine(settings.config.quietStartup) : undefined,
-				shadowLine(settings, command.scope, keys),
-			);
-			return changedNotice(saved, settings, onward.progress(), done);
+			if (saved.kind === "saved" || saved.kind === "unwritten") onward.stop(ctx);
+			if (command.change.enabled !== undefined)
+				return toggleNotice(saved, settings, status(), command.scope, command.change.enabled);
+			return changedNotice(saved, settings, status(), {
+				action: command.change.unset ? "unset" : "set",
+				scope: command.scope,
+				keys: command.change.unset ?? Object.keys(command.change.set ?? {}),
+			});
 		}
 	}
-}
-
-/** 跟在标题后面的几行；都没有时是 undefined。 */
-function note(...lines: (string | undefined)[]): string | undefined {
-	const kept = lines.filter((line): line is string => line !== undefined);
-	return kept.length ? kept.join("\n") : undefined;
-}
-
-/** 这次改到的开关和参数。 */
-function changedKeys(change: SettingsChange): string[] {
-	return [
-		...(change.enabled === undefined ? [] : ["enabled"]),
-		...Object.keys(change.set ?? {}),
-		...(change.unset ?? []),
-	];
 }
 
 export function parseCommand(text: string): Command {
@@ -308,22 +304,21 @@ export function parseCommand(text: string): Command {
 	const [first, ...rest] = words;
 	const spec = first === undefined ? undefined : actionNamed(first);
 	const topic = spec && { topic: spec.name };
-	if (count > 1) return { kind: "error", message: `${SCOPE} 写了两次`, ...topic };
+	if (count > 1) return { kind: "error", message: `${SCOPE} may only be specified once`, ...topic };
 	const scope = count ? scopeNamed(value) : "global";
 	// 先看 --scope 的值：`--scope set …` 是漏写了值，不是动作写错了。
 	if (scope === undefined)
 		return {
 			kind: "error",
-			message: `${SCOPE} ${value === undefined ? "后面要写" : "只能是"} ${SCOPES.join(" 或 ")}`,
+			message: `${SCOPE} ${value === undefined ? "requires" : "must be"} ${SCOPES.join(" or ")}`,
 			...topic,
 		};
 	if (first !== undefined && !spec) return unknownAction(first);
 	if (count && spec && !spec.scoped) return { kind: "error", message: scopedOnly(), topic: spec.name };
-	// --scope 是命令的目标，写在动作前；写在别处不执行，给出正确的写法。
 	if (count && at !== 0)
 		return {
 			kind: "error",
-			message: `${SCOPE} 要写在动作前：/${COMMAND} ${[SCOPE, scope, ...words.map(quoted)].join(" ")}`,
+			message: `${SCOPE} must precede the action: /${COMMAND} ${[SCOPE, scope, ...words.map(quoted)].join(" ")}`,
 			...topic,
 		};
 	if (!spec) return count ? { kind: "choose", scope } : { kind: "choose" };
@@ -331,6 +326,7 @@ export function parseCommand(text: string): Command {
 	switch (action) {
 		case "status":
 		case "reload":
+		case "actions":
 			return none(action, rest) ?? { kind: action };
 		case "reset":
 			return none(action, rest) ?? { kind: "reset", scope };
@@ -338,11 +334,10 @@ export function parseCommand(text: string): Command {
 		case "off":
 			return none(action, rest) ?? { kind: "update", scope, change: { enabled: action === "on" } };
 		case "show": {
-			// 不写 --scope 是合并后的结果，不是全局那一份。
 			const only = count ? { scope } : {};
 			if (!rest.length) return { kind: "show", rules: false, ...only };
 			if (rest.length === 1 && rest[0] === "rules") return { kind: "show", rules: true, ...only };
-			return { kind: "error", message: "show 后面只能写 rules", topic: "show" };
+			return { kind: "error", message: "show only accepts the optional argument 'rules'", topic: "show" };
 		}
 		case "set":
 			return parseSet(rest, scope);
@@ -353,10 +348,7 @@ export function parseCommand(text: string): Command {
 	}
 }
 
-/**
- * 把 `--scope <值>`、`--scope=<值>` 从词里拿出来。`at` 是第一个 `--scope` 前面有几个别的词：
- * 只有 0 是写在动作前；`value` 是它的值，没写时是 undefined；`count` 是写了几次。`-` 开头的词（如 --help）不算它的值。
- */
+/** at 是首个 --scope 前的其他词数；只有 0 合法。支持 --scope=x 与 --scope x。 */
 function splitScope(tokens: readonly string[]): { words: string[]; at: number; value?: string; count: number } {
 	const words: string[] = [];
 	let at = -1;
@@ -385,7 +377,7 @@ function splitScope(tokens: readonly string[]): { words: string[]; at: number; v
 	return { words, at, ...(value !== undefined && { value }), count };
 }
 
-/** 这个词是 `--scope` 或 `--scope=<值>` 时：`inline` 是值写在 = 后面（可能是空的）。 */
+/** inline 区分 --scope 与 --scope=（包括空值）。 */
 function scopeOption(token: string): { inline: boolean; value?: string } | undefined {
 	const match = /^--scope(?:=(.*))?$/.exec(token);
 	if (!match) return undefined;
@@ -396,7 +388,6 @@ function scopeNamed(value: string | undefined): Scope | undefined {
 	return SCOPES.find((scope) => scope === value);
 }
 
-/** 给出正确写法时，含空白的词重新加上引号。 */
 function quoted(word: string): string {
 	if (!/\s/.test(word)) return word;
 	const equals = word.indexOf("=");
@@ -404,40 +395,43 @@ function quoted(word: string): string {
 }
 
 function scopedOnly(): string {
-	return `${SCOPE} 只用于 ${scopedActions()}`;
+	return `${SCOPE} is only supported by ${scopedActions()}`;
 }
 
-/** 能写 --scope 的动作；`write`：只要改设置的。 */
 function scopedActions(only?: "write"): string {
 	return ACTIONS.filter((item) => (only ? item.scoped === only : item.scoped))
 		.map((item) => item.name)
-		.join("、");
+		.join(", ");
 }
 
 function unknownAction(word: string): Command {
-	return { kind: "error", message: `不认识的动作 ${word}；可用 ${actionList()}` };
+	return { kind: "error", message: `Unknown action '${word}'; available actions: ${actionList()}` };
 }
 
-/** 不带参数的动作带了参数。 */
+/** 拒绝无参动作后多写的参数。 */
 function none(action: string, rest: string[]): Command | undefined {
-	return rest.length ? { kind: "error", message: `${action} 不带参数`, topic: action } : undefined;
+	return rest.length ? { kind: "error", message: `${action} does not accept arguments`, topic: action } : undefined;
 }
 
 function parseSet(tokens: string[], scope: Scope): Command {
 	if (!tokens.length)
-		return { kind: "error", message: `set 要写 字段=值；可用 ${settable(scope).join("、")}`, topic: "set" };
+		return {
+			kind: "error",
+			message: `set requires field=value; available fields: ${settable(scope).join(", ")}`,
+			topic: "set",
+		};
 	const problems: string[] = [];
 	const values: Record<string, unknown> = {};
 	for (const token of tokens) {
 		const equals = token.indexOf("=");
 		if (equals <= 0) {
-			problems.push(`「${token}」写成 字段=值`);
+			problems.push(`'${token}' must use field=value`);
 			continue;
 		}
 		const key = token.slice(0, equals);
 		const text = token.slice(equals + 1);
 		if (Object.hasOwn(values, key)) {
-			problems.push(`${key} 写了两次`);
+			problems.push(`${key} may only be specified once`);
 			continue;
 		}
 		const parsed = key === QUIET ? quietValue(text, scope) : paramValue(key, text, scope);
@@ -457,57 +451,56 @@ function paramValue(key: string, text: string, scope: Scope): Parsed {
 	return "problem" in read ? { problem: `${known.name} ${read.problem}` } : { name: known.name, value };
 }
 
-/** quietStartup 只认 true、false，只能写在全局：项目级的能关掉「用上了项目级设置」这句提醒。 */
+/** 项目不能自行隐藏启用项目配置的提示。 */
 function quietValue(text: string, scope: Scope): Parsed {
-	if (scope !== "global") return { problem: `${QUIET} 只能写在全局设置，不写 ${SCOPE} 就是全局` };
-	if (text !== "true" && text !== "false") return { problem: `${QUIET} 需要 true 或 false` };
+	if (scope !== "global")
+		return { problem: `${QUIET} is only allowed in global settings; omit ${SCOPE} to use global scope` };
+	if (text !== "true" && text !== "false") return { problem: `${QUIET} must be true or false` };
 	return { name: QUIET, value: text === "true" };
 }
 
-/** set 能写的字段：参数，全局还有 quietStartup。 */
 function settable(scope: Scope): readonly string[] {
 	return scope === "global" ? [...FIELD_NAMES, QUIET] : FIELD_NAMES;
 }
 
-/**
- * unset 能去掉的：参数，和开关 enabled。开关有两份设置时也要能去掉：去掉项目级的才继承全局的。
- */
 function parseUnset(tokens: string[], scope: Scope): Command {
 	if (!tokens.length)
-		return { kind: "error", message: `unset 要写字段名；可用 ${COMMAND_KEYS.join("、")}`, topic: "unset" };
+		return {
+			kind: "error",
+			message: `unset requires field names; available fields: ${COMMAND_KEYS.join(", ")}`,
+			topic: "unset",
+		};
 	const problems: string[] = [];
 	const unset: string[] = [];
 	for (const token of tokens) {
 		const key = unsetKey(token, scope);
 		if ("problem" in key) problems.push(key.problem);
-		else if (unset.includes(key.name)) problems.push(`${key.name} 写了两次`);
+		else if (unset.includes(key.name)) problems.push(`${key.name} may only be specified once`);
 		else unset.push(key.name);
 	}
 	return problems.length ? rejected(problems, "unset") : { kind: "update", scope, change: { unset } };
 }
 
 function unsetKey(token: string, scope: Scope): { name: string } | { problem: string } {
-	// quietStartup 在哪一份都能去掉：项目级写了它是一处问题，去掉就好了。
+	// 允许删除项目层误写的 quietStartup，以修复配置。
 	if (token === "enabled" || token === QUIET) return { name: token };
 	const known = paramField(token, scope, COMMAND_KEYS);
 	return typeof known === "string" ? { problem: known } : { name: known.name };
 }
 
-/**
- * 参数字段；不是时说明为什么。开关的提示写同一份的写法。`names` 是这个动作能写的字段，不认识时列出来。
- */
 function paramField(key: string, scope: Scope, names: readonly string[] = FIELD_NAMES): Field | string {
-	if (key === "rules") return `rules 要在设置文件里手写，改完 /${COMMAND} reload`;
-	if (key === "enabled") return `开关用 /${COMMAND} ${scope === "project" ? `${SCOPE} project ` : ""}on 或 off`;
-	return fieldNamed(key) ?? `不认识的字段 ${key}；可用 ${names.join("、")}`;
+	if (key === "rules") return `rules must be edited in the settings file; then run /${COMMAND} reload`;
+	if (key === "enabled")
+		return `use /${COMMAND} ${scope === "project" ? `${SCOPE} project ` : ""}on or off to change enabled`;
+	return fieldNamed(key) ?? `Unknown field '${key}'; available fields: ${names.join(", ")}`;
 }
 
 function rejected(problems: string[], topic: string): Command {
-	return { kind: "error", message: `${problems.join("；")}。未做任何修改`, topic };
+	return { kind: "error", message: `${problems.join("; ")}. No changes made`, topic };
 }
 
 function actionList(): string {
-	return ACTIONS.map((item) => item.name).join("、");
+	return ACTIONS.map((item) => item.name).join(", ");
 }
 
 function actionNamed(name: string): ActionSpec | undefined {
@@ -516,7 +509,6 @@ function actionNamed(name: string): ActionSpec | undefined {
 
 // ── 帮助 ──
 
-/** `topic` 是动作名：这个动作的帮助；没有时是总帮助。 */
 export function helpText(topic?: string): string {
 	const spec = topic === undefined ? undefined : actionNamed(topic);
 	return spec ? actionHelp(spec) : overallHelp();
@@ -524,7 +516,7 @@ export function helpText(topic?: string): string {
 
 function overallHelp(): string {
 	return [
-		"onward — 出错后按规则自动续跑",
+		`${COMMAND} — ${DESCRIPTION}`,
 		`用法：/${COMMAND} [${SCOPE} <${SCOPES.join("|")}>] [动作] [参数] [${HELP}]`,
 		...section("动作", table(ACTIONS.map((item) => [item.name, item.description]))),
 		"",
@@ -545,7 +537,14 @@ function actionHelp(spec: ActionSpec): string {
 			[...spec.details, ...(spec.scoped === "write" ? [SCOPE_HELP] : [])].map((line) => `  ${line}`),
 		),
 		...(spec.fields
-			? section("字段", table([...FIELDS.map((item): [string, string] => [item.name, fieldHelp(item)]), QUIET_HELP]))
+			? section(
+					"字段",
+					table([
+						...(spec.name === "unset" ? [["enabled", "自动续跑开关；去掉后继承下一层"] as [string, string]] : []),
+						...FIELDS.map((item): [string, string] => [item.name, fieldHelp(item)]),
+						QUIET_HELP,
+					]),
+				)
 			: []),
 		...section(
 			"示例",
@@ -554,32 +553,24 @@ function actionHelp(spec: ActionSpec): string {
 	].join("\n");
 }
 
-/** 能写 --scope 的动作前面写着 `[--scope <global|project>]`。 */
 function usage(spec: ActionSpec): string {
 	const words = [spec.scoped ? `[${SCOPE} <${SCOPES.join("|")}>]` : "", spec.name, spec.args];
 	return words.filter(Boolean).join(" ");
 }
 
-/** 作用一行，写法和默认值一行；有固定取值的逐个列出，标出默认的那个。 */
 function fieldHelp(item: Field): string {
-	const fallback = DEFAULT_POLICY[item.name];
-	const values = item.choices
-		? item.choices.map(
-				(choice) => `${choice.value}：${choice.description}${choice.value === fallback ? "（默认）" : ""}`,
-			)
-		: [`${item.syntax}；默认：${item.show(fallback)}`];
-	return [item.description, ...values].join("\n");
+	return [item.description, `${item.syntax}；默认：${item.show(DEFAULT_LIMITS[item.name])}`].join("\n");
 }
 
 // ── 分词 ──
 
-/** 按空白分开，双引号里的空白不分；引号本身去掉。 */
+/** 与补全共用分词，未闭合引号只在执行时拒绝。 */
 function tokenize(text: string): string[] | string {
 	const { words, quoted } = scan(text);
-	return quoted ? "引号没有配对" : words;
+	return quoted ? "Unmatched double quote" : words;
 }
 
-/** 执行和补全共用。`start` 是正在写的词在原文里的起点，以空白结尾时就是末尾；`quoted`：引号到末尾还没配对。 */
+/** start 为当前词的起点；quoted 表示引号未闭合，补全时允许这种中间状态。 */
 function scan(text: string): { words: string[]; start: number; quoted: boolean } {
 	const words: string[] = [];
 	let word = "";
@@ -612,13 +603,7 @@ interface Candidate {
 	description: string;
 }
 
-/**
- * 补全：动作前的 --scope 和它的取值、动作、show 的 rules、set 和 unset 的字段名、action 的取值，以及每个动作后面的
- * --help。返回的 value 换掉「/onward 」后面的全部文字，正在写的词前面原样保留。
- *
- * 选中的词后面还能接着写时补一个空格，下一下 Tab 补下一层；`字段=` 停在 = 后面写值。写了 --help 就结束了，
- * 什么都不再给。写完的词不给列表，回车直接执行；写过的字段和引号里的值不补。
- */
+/** value 替换 /onward 后的全部参数；保留已输入前缀，仅补全当前词。 */
 export function completeArguments(prefix: string): { value: string; label: string }[] | null {
 	const { words, start } = scan(prefix);
 	const current = prefix.slice(start);
@@ -640,10 +625,6 @@ export function completeArguments(prefix: string): { value: string; label: strin
 	}));
 }
 
-/**
- * `words` 后面能写的词；--help 之后、写错了的地方都是空的。--scope 只在动作前给：写在别处执行时会被拒绝；写了它之后
- * 只给能写 --scope 的动作。`--scope=<值>` 和 `--scope <值>` 一样看。
- */
 function candidates(typed: string[], current: string): Candidate[] {
 	if (typed.includes(HELP)) return [];
 	const words = typed.flatMap((word) => {
@@ -662,7 +643,7 @@ function candidates(typed: string[], current: string): Candidate[] {
 	const [first, ...rest] = scoped ? words.slice(2) : words;
 	if (first === undefined)
 		return [
-			...(scoped ? [] : [{ value: SCOPE, description: "看或改哪一份设置，写在动作前：global 或 project" }]),
+			...(scoped ? [] : [{ value: SCOPE, description: "指定查看或修改的配置范围" }]),
 			...ACTIONS.filter((item) => !scoped || item.scoped).map((item) => ({
 				value: item.name,
 				description: item.description,
@@ -675,7 +656,7 @@ function candidates(typed: string[], current: string): Candidate[] {
 	return args ? [...args, { value: HELP, description: `显示 ${spec.name} 的帮助，不执行` }] : [];
 }
 
-/** 动作后面的参数；`undefined`：这里已经写错了，执行时会被拒绝，--help 也不给。 */
+/** undefined 表示输入已无效，不再补全 --help。 */
 function argumentCandidates(action: string, rest: string[], current: string, scope: Scope): Candidate[] | undefined {
 	switch (action) {
 		case "show":
@@ -689,25 +670,22 @@ function argumentCandidates(action: string, rest: string[], current: string, sco
 	}
 }
 
-/** quietStartup= 后面能写的。 */
 const QUIET_CHOICES: readonly Candidate[] = [
 	{ value: "true", description: "启动时不显示 onward 的提示；设置有问题时照样警告" },
 	{ value: "false", description: "照常显示，不管 pi 的 quietStartup" },
 ];
 
 function fieldCandidates(action: string, rest: string[], current: string, scope: Scope): Candidate[] | undefined {
-	// quietStartup 只能写在全局：项目级的 set 不收它，也不给；unset 哪一份都收，项目级的不给。
+	// 项目层不提示 quietStartup，但允许手写 unset 来修复误配置。
 	const offered = scope === "global";
 	const named = (name: string) =>
 		fieldNamed(name) !== undefined || (name === QUIET && (offered || action === "unset"));
-	// 前面有执行时会被拒绝的词（不认识的字段、大小写不对的、没写 = 或值的），什么都不给。
 	const valid = (word: string) => {
 		if (action === "unset") return word === "enabled" || named(word);
 		const equals = word.indexOf("=");
 		return equals > 0 && equals < word.length - 1 && named(word.slice(0, equals));
 	};
 	if (!rest.every(valid)) return undefined;
-	// 写过的字段不再给：再写一次，执行时会被拒绝。
 	const written = new Set(rest.map((word) => word.split("=")[0]));
 	const unwritten = FIELDS.filter((item) => !written.has(item.name));
 	const quiet = offered && !written.has(QUIET);
@@ -729,10 +707,5 @@ function fieldCandidates(action: string, rest: string[], current: string, scope:
 	if (written.has(name)) return undefined;
 	if (name === QUIET)
 		return quiet ? QUIET_CHOICES.map((choice) => ({ ...choice, value: `${QUIET}=${choice.value}` })) : undefined;
-	const known = fieldNamed(name);
-	if (!known) return undefined;
-	return (known.choices ?? []).map((choice) => ({
-		value: `${known.name}=${choice.value}`,
-		description: choice.description,
-	}));
+	return fieldNamed(name) ? [] : undefined;
 }

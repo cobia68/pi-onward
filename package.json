@@ -1,7 +1,7 @@
 {
   "name": "@cobia/pi-onward",
-  "version": "0.3.1",
-  "description": "pi 出错或空回停止时，按规则自动续跑",
+  "version": "0.4.0",
+  "description": "pi 出错或空回复时，按阶段策略恢复并调用扩展命令或具名动作",
   "keywords": [
     "pi",
     "pi-package",
@@ -23,8 +23,12 @@
       "./src/extension/index.ts"
     ]
   },
+  "exports": {
+    "./actions": "./src/actions/protocol.ts"
+  },
   "files": [
     "src/",
+    "docs/",
     "example.json",
     "onward.schema.json"
   ],
@@ -50,5 +54,8 @@
     "@types/node": "^22.20.5",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0"
   }
 }

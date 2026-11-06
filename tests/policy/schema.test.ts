@@ -1,125 +1,40 @@
-// onward.schema.json：从字段表生成，提交的文件不能过期；它允许的写法要和读设置时收下的一致。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { CONFIG_KEYS, parseLayer } from "../../src/policy/config.ts";
-import { DELAY_PATTERN, parseDelay } from "../../src/policy/delay.ts";
-import { DEFAULT_POLICY, FIELDS } from "../../src/policy/policy.ts";
-import { RULE_KEYS } from "../../src/policy/rules.ts";
-import { configSchema, SCHEMA_URL } from "../../src/policy/schema.ts";
+import { Ajv2020 } from "ajv/dist/2020.js";
+import { parseLayer } from "../../src/policy/config.ts";
+import { configSchema } from "../../src/policy/schema.ts";
+import { rule, stage } from "../support/fake-pi.ts";
 
-type Schema = Record<string, any>;
+const schema = configSchema();
+const validate = new Ajv2020({ strict: false }).compile(schema);
 
-const readJson = (file: string) => JSON.parse(readFileSync(new URL(`../../${file}`, import.meta.url), "utf8"));
-const schema: Schema = configSchema();
-
-test("提交的 onward.schema.json 就是字段表生成的；过期了运行 npm run gen:schema", () => {
-	assert.deepEqual(readJson("onward.schema.json"), schema);
+test("提交的 Schema 与生成器完全一致", () => {
+	assert.deepEqual(JSON.parse(readFileSync(new URL("../../onward.schema.json", import.meta.url), "utf8")), schema);
 });
-
-test("键和读设置时认的一样：顶层、规则、条件都不多不少", () => {
-	assert.deepEqual(Object.keys(schema.properties).sort(), [...CONFIG_KEYS].sort());
-	assert.deepEqual(Object.keys(schema.$defs.rule.properties).sort(), [...RULE_KEYS].sort());
-	assert.deepEqual(Object.keys(schema.$defs.when.properties).sort(), ["failure", "model", "provider"]);
-	for (const key of Object.keys(schema.$defs.when.properties)) {
-		const problems = parseLayer({ rules: [{ when: { [key]: "x" } }] }).problems;
-		assert.deepEqual(problems, [], key);
-	}
-	assert.deepEqual(parseLayer({ rules: [{ when: { colour: "red" } }] }).problems, [
-		"rules[0]（rule-1）.when.colour 不认识",
-	]);
-	for (const part of [schema, schema.$defs.rule, schema.$defs.when]) assert.equal(part.additionalProperties, false);
-	assert.equal(schema.$defs.when.dependentSchemas, undefined, "不再有失败种类的特殊互斥条件");
+test("Schema 接受新结构，拒绝旧平铺策略与非法动作结构", () => {
+	const good = { rules: [rule([stage(), stage(3, "respawn.restart", { model: "other" })])] };
+	assert.equal(validate(good), true, JSON.stringify(validate.errors));
+	assert.deepEqual(parseLayer(good).problems, []);
+	for (const raw of [
+		{ action: "resend" },
+		{ maxRetries: 3 },
+		{ rules: [{ action: "message" }] },
+		{ rules: [rule([stage(2)])] },
+		{ rules: [rule([stage(1, "bad")])] },
+	])
+		assert.equal(validate(raw), false, JSON.stringify(raw));
 });
-
-test("兜底要显式写 action：schema 要求动作或非空 when，与读设置时一致", () => {
-	assert.deepEqual(schema.$defs.rule.anyOf, [
-		{ required: ["action"] },
-		{ required: ["when"], properties: { when: { minProperties: 1 } } },
-	]);
-	for (const rule of [{}, { name: "fallback" }, { when: {} }])
-		assert.match(parseLayer({ action: "resend", rules: [rule] }).problems.join(), /action 不能省略/);
-	for (const rule of [{ action: "message" }, { when: {}, action: "stop" }, { when: { failure: "401" } }])
-		assert.deepEqual(parseLayer({ rules: [rule] }).problems, []);
-});
-
-test("failure 始终是非空字符串，没有枚举、对象或空值特例；正则由运行时检查", () => {
-	const field = schema.$defs.when.properties.failure;
-	assert.equal(field.type, "string");
-	assert.equal(field.minLength, 1);
-	assert.equal(field.enum, undefined);
-	assert.equal(field.format, undefined, "不强加 u 模式的 regex 格式检查");
-	for (const failure of ["^$", ".+", ".*", "401|^$", "empty", "error", "[\\w-.]"])
-		assert.deepEqual(parseLayer({ rules: [{ when: { failure } }] }).problems, [], failure);
-	assert.match(parseLayer({ rules: [{ when: { failure: "" } }] }).problems.join(), /需要非空正则字符串/);
-});
-
-test("每个参数的取值和读设置时一样：范围、可选值、写法", () => {
-	for (const item of FIELDS) {
-		const top = schema.properties[item.name];
-		assert.deepEqual(schema.$defs.rule.properties[item.name].enum, top.enum, item.name);
-		if (top.type === "integer") {
-			for (const value of [top.minimum, top.maximum])
-				assert.ok("value" in item.read(value), `${item.name}=${value}`);
-			for (const value of [top.minimum - 1, top.maximum + 1, 1.5])
-				assert.ok("problem" in item.read(value), `${item.name}=${value}`);
-		}
-		if (top.enum) {
-			assert.deepEqual(
-				top.enum,
-				item.choices?.map((choice) => choice.value),
-			);
-			assert.ok("problem" in item.read("loud"));
-		}
-	}
-	assert.ok("value" in FIELDS.find((item) => item.name === "prompt")!.read("x".repeat(500)));
-	assert.ok("problem" in FIELDS.find((item) => item.name === "prompt")!.read("x".repeat(501)));
-});
-
-test("delay 的写法：编辑器认的和 parseDelay 收的一样；超出范围这类意思上的问题只有读设置时才查", () => {
-	const pattern = new RegExp(DELAY_PATTERN);
-	for (const text of ["3s", "500ms", "1.5s", "2m", "3s..15s", " 5s , 10s,30s ", "1ms"]) {
-		assert.ok(pattern.test(text), text);
-		assert.equal(typeof parseDelay(text), "object", text);
-	}
-	for (const text of [
-		"",
-		"5",
-		"5s,",
-		",5s",
-		"5s;10s",
-		"3s..",
-		"3s..15",
-		"3s .. 15s",
-		"3s..15s..20s",
-		"5 s",
-		"1h",
-		"5S",
-		"1MS",
-		"2M",
-	]) {
-		assert.ok(!pattern.test(text), text);
-		assert.equal(typeof parseDelay(text), "string", text);
-	}
-	for (const text of ["15s..3s", "61m"]) {
-		assert.ok(pattern.test(text), text);
-		assert.equal(typeof parseDelay(text), "string", text);
+test("Schema 和读取器使用 minFailures，拒绝旧字段及新旧字段混用", () => {
+	const current = { rules: [{ stages: [{ minFailures: 1, action: { use: "onward.message" } }] }] };
+	assert.equal(validate(current), true, JSON.stringify(validate.errors));
+	assert.deepEqual(parseLayer(current).problems, []);
+	for (const threshold of [{ fromFailure: 1 }, { minFailures: 1, fromFailure: 1 }]) {
+		const legacy = { rules: [{ stages: [{ ...threshold, action: { use: "onward.message" } }] }] };
+		assert.equal(validate(legacy), false);
+		assert.ok(parseLayer(legacy).problems.includes("rules[0].stages[0].fromFailure is not a recognized field"));
 	}
 });
-
-test("顶层的默认值就是内置默认值，规则里的不写默认值：规则没写的用顶层的", () => {
-	const example = readJson("example.json");
-	for (const item of FIELDS) {
-		assert.deepEqual(schema.properties[item.name].default, example[item.name], item.name);
-		assert.equal("default" in schema.$defs.rule.properties[item.name], false, item.name);
-	}
-	assert.equal(schema.properties.prompt.default, DEFAULT_POLICY.prompt);
-});
-
-test("地址只有一个：schema 的 $id、example.json 的 $schema、README 里写的", () => {
-	assert.equal(schema.$id, SCHEMA_URL);
-	assert.equal(readJson("example.json").$schema, SCHEMA_URL);
-	const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
-	assert.ok(readme.includes(`"$schema": "${SCHEMA_URL}"`));
-	assert.ok(readJson("package.json").files.includes("onward.schema.json"), "随 npm 包发布");
+test("动作参数由注册表校验，编辑器 Schema 不把插件名称写死", () => {
+	assert.equal(validate({ rules: [rule([stage(1, "future.plugin", { value: [1, 2] })])] }), true);
 });

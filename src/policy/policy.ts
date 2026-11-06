@@ -1,173 +1,79 @@
-/**
- * 续跑的参数：一张字段表，设置文件、规则、命令、帮助、补全和 JSON Schema 都用它。设置文件顶层写的就是每条规则的
- * 默认值，规则里同名的字段覆盖它。
- */
-import { DELAY_PATTERN, DELAY_SYNTAX, type Delay, delayText, parseDelay } from "./delay.ts";
+/** Recovery-wide limits. Stages own their actions and delays; there are no inherited action parameters. */
+import { formatDelay, parseDuration } from "./delay.ts";
 
-/** message 发一条看得见的消息再接着跑；resend 从上下文里省略失败的那条，重发同一个请求；stop 不续跑，只提醒。 */
-export type Action = "message" | "resend" | "stop";
-
-export interface Policy {
-	action: Action;
-	/** message 发的消息，可含 {attempt} {max} {error} {rule}。 */
-	prompt: string;
-	/** 连续失败时最多续跑几次，正常返回一次就从头算。 */
-	maxRetries: number;
-	/** 同一个错误最多续跑几次：连续出现超过这么多次就彻底停。 */
-	maxSameError: number;
-	delay: Delay;
+export interface Limits {
+	maxFailures: number;
+	maxHandoffs: number;
+	/** Maximum execution time of one action, in milliseconds. Waiting delay is separate. */
+	actionTimeout: number;
 }
-
-export type PolicyPatch = Partial<Policy>;
-
-export interface Field<K extends keyof Policy = keyof Policy> {
+export type LimitsPatch = Partial<Limits>;
+export interface Field<K extends keyof Limits = keyof Limits> {
 	name: K;
-	/** 帮助里的写法。 */
 	syntax: string;
 	description: string;
-	/** 只在这些动作下使用；不写表示都使用。规则显式写了不适用的参数时只提醒。 */
-	appliesTo?: readonly Action[];
-	/** 补全的候选值。 */
-	choices?: readonly { value: string; description: string }[];
-	/** 设置文件里的值；合法时返回 value，否则返回原因。 */
-	read(value: unknown): { value: Policy[K] } | { problem: string };
-	/** 命令里的文字 → 设置文件里的值。 */
+	read(value: unknown): { value: Limits[K] } | { problem: string };
 	fromText(text: string): unknown;
-	/** 给人看的值。 */
-	show(value: Policy[K]): string;
-	/** 设置文件里这个字段的 JSON Schema：和 `read` 收下的一致，只管写法，含义上的检查留给 `read`。 */
+	show(value: Limits[K]): string;
 	schema: Readonly<Record<string, unknown>>;
 }
 
-/** 两个次数上限的范围。一条规则最多续跑 maxRetries 次，同错上限比它大时用不上，所以范围一样。 */
-const RETRIES = { min: 1, max: 50 } as const;
-const PROMPT_MAX = 500;
-
-const ACTIONS: readonly { value: Action; description: string }[] = [
-	{ value: "message", description: "发一条看得见的消息再接着跑" },
-	{ value: "resend", description: "静默重发同一个请求" },
-	{ value: "stop", description: "不续跑，只提醒" },
-];
-
-const field = <K extends keyof Policy>(spec: Field<K>): Field<K> => spec;
-
-export const FIELDS: readonly Field[] = [
-	field({
-		name: "action",
-		syntax: ACTIONS.map((item) => item.value).join(" | "),
-		description: "怎么续跑",
-		choices: ACTIONS,
-		read: (v) =>
-			ACTIONS.some((item) => item.value === v)
-				? { value: v as Action }
-				: { problem: "只能是 message、resend 或 stop" },
-		fromText: (text) => text,
-		show: String,
-		schema: { enum: ACTIONS.map((item) => item.value) },
-	}),
-	field({
-		name: "prompt",
-		appliesTo: ["message"],
-		syntax: "文字",
-		description: "message 发的消息，可含 {attempt} {max} {error} {rule}",
-		read: (v) =>
-			typeof v === "string" && v.trim() && v.trim().length <= PROMPT_MAX
-				? { value: v.trim() }
-				: { problem: `需要 1–${PROMPT_MAX} 字的文字` },
-		fromText: (text) => text,
-		show: (prompt) => `「${prompt}」`,
-		schema: { type: "string", pattern: "\\S", maxLength: PROMPT_MAX },
-	}),
-	field({
-		name: "maxRetries",
-		appliesTo: ["message", "resend"],
-		syntax: `${RETRIES.min}–${RETRIES.max}`,
-		description: "连续失败时最多续跑几次",
-		read: (v) => integer(v, RETRIES.min, RETRIES.max),
-		fromText: number,
-		show: String,
-		schema: { type: "integer", minimum: RETRIES.min, maximum: RETRIES.max },
-	}),
-	field({
-		name: "maxSameError",
-		appliesTo: ["message", "resend"],
-		syntax: `${RETRIES.min}–${RETRIES.max}`,
-		description: "同一个错误最多续跑几次，再出现就彻底停",
-		read: (v) => integer(v, RETRIES.min, RETRIES.max),
-		fromText: number,
-		show: String,
-		schema: { type: "integer", minimum: RETRIES.min, maximum: RETRIES.max },
-	}),
-	field({
-		name: "delay",
-		appliesTo: ["message", "resend"],
-		syntax: DELAY_SYNTAX,
-		description: "列表按顺序等，最后一个值重复；起步..封顶按次数增长",
-		read: (v) => {
-			const delay = typeof v === "string" ? parseDelay(v) : `写成 ${DELAY_SYNTAX}`;
-			return typeof delay === "string" ? { problem: delay } : { value: delay };
-		},
-		fromText: (text) => text,
-		show: delayText,
-		schema: { type: "string", pattern: DELAY_PATTERN },
-	}),
-];
-
-export const FIELD_NAMES: readonly string[] = FIELDS.map((item) => item.name);
-
-/** 字段名区分大小写，和设置文件一样。 */
-export function fieldNamed(name: string): Field | undefined {
-	return FIELDS.find((item) => item.name === name);
-}
-
-export const DEFAULT_POLICY: Readonly<Policy> = Object.freeze<Policy>({
-	action: "message",
-	prompt: "继续",
-	maxRetries: 10,
-	maxSameError: 10,
-	delay: { kind: "ramp", step: 3_000, cap: 15_000 },
+export const DEFAULT_LIMITS: Readonly<Limits> = Object.freeze({
+	maxFailures: 20,
+	maxHandoffs: 3,
+	actionTimeout: 30_000,
 });
+const integer =
+	(min: number, max: number) =>
+	(value: unknown): { value: number } | { problem: string } =>
+		Number.isSafeInteger(value) && (value as number) >= min && (value as number) <= max
+			? { value: value as number }
+			: { problem: `must be an integer between ${min} and ${max}` };
+export const FIELDS: readonly Field[] = [
+	{
+		name: "maxFailures",
+		syntax: "1–1000",
+		description: "一次恢复过程最多处理多少次失败；超过后停止",
+		read: integer(1, 1000),
+		fromText: (text) => (/^\d+$/.test(text) ? Number(text) : text),
+		show: String,
+		schema: { type: "integer", minimum: 1, maximum: 1000 },
+	},
+	{
+		name: "maxHandoffs",
+		syntax: "0–50",
+		description: "恢复链最多跨会话接管多少次；0 禁止接管",
+		read: integer(0, 50),
+		fromText: (text) => (/^\d+$/.test(text) ? Number(text) : text),
+		show: String,
+		schema: { type: "integer", minimum: 0, maximum: 50 },
+	},
+	{
+		name: "actionTimeout",
+		syntax: "30s",
+		description: "单次动作执行时限；超时结果未知，不自动重放",
+		read(value) {
+			const ms = typeof value === "string" ? parseDuration(value) : undefined;
+			return ms !== undefined && ms > 0
+				? { value: ms }
+				: { problem: "must be a positive duration no greater than 60m, using ms, s, or m" };
+		},
+		fromText: String,
+		show: formatDelay,
+		schema: { type: "string", pattern: "^\\d+(\\.\\d+)?(ms|s|m)$" },
+	},
+];
+export const FIELD_NAMES = FIELDS.map((field) => field.name);
+export const fieldNamed = (name: string): Field | undefined => FIELDS.find((field) => field.name === name);
+export const resolveLimits = (patch: LimitsPatch): Limits => ({ ...DEFAULT_LIMITS, ...patch });
 
-/** 内置默认值 ← 设置文件顶层 ← 规则自己的字段。 */
-export function resolvePolicy(defaults: PolicyPatch, rule: PolicyPatch = {}): Policy {
-	return { ...DEFAULT_POLICY, ...defaults, ...rule };
-}
-
-/**
- * 读设置文件顶层或一条规则里的参数：合法的收下，不合法的记一条问题，不夹到范围内、也不退回默认值。
- * 有问题的设置整份不生效（见 config.ts），所以这里不用分哪些字段要紧。不是参数的键交给调用方。
- * `where` 是问题里的位置前缀，如 `rules[2]（auth）.`。
- */
-export function readParams(raw: Record<string, unknown>, where: string, problems: string[]): PolicyPatch {
-	const patch: Record<string, unknown> = {};
-	for (const item of FIELDS) {
-		if (!Object.hasOwn(raw, item.name)) continue;
-		const result = item.read(raw[item.name]);
-		if ("value" in result) patch[item.name] = result.value;
-		else problems.push(`${where}${item.name} ${result.problem}`);
+export function readLimits(raw: Record<string, unknown>, problems: string[]): LimitsPatch {
+	const patch: LimitsPatch = {};
+	for (const field of FIELDS) {
+		if (!Object.hasOwn(raw, field.name)) continue;
+		const result = field.read(raw[field.name]);
+		if ("problem" in result) problems.push(`${field.name} ${result.problem}`);
+		else patch[field.name] = result.value;
 	}
 	return patch;
-}
-
-export interface PromptVars {
-	attempt: number;
-	max: number;
-	error: string;
-	rule: string;
-}
-
-/** 不认识的占位原样留着。 */
-export function renderPrompt(template: string, vars: PromptVars): string {
-	return template.replace(/\{(attempt|max|error|rule)\}/g, (_, key: keyof PromptVars) => String(vars[key]));
-}
-
-function integer(value: unknown, min: number, max: number): { value: number } | { problem: string } {
-	return Number.isInteger(value) && (value as number) >= min && (value as number) <= max
-		? { value: value as number }
-		: { problem: `需要 ${min}–${max} 的整数` };
-}
-
-/** 不是数字的文字原样交给 read，由它说明要什么。 */
-function number(text: string): unknown {
-	return /^-?\d+(?:\.\d+)?$/.test(text) ? Number(text) : text;
 }

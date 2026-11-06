@@ -1,62 +1,42 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/cobia68/pi-onward/main/onward.schema.json",
-  "title": "pi-onward 设置",
-  "description": "~/.pi/agent/onward.json（全局）或 .pi/onward.json（项目级）。顶层的参数是每条规则的默认值，规则里同名的字段覆盖它",
+  "title": "pi-onward 阶段恢复策略",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "$schema": {
-      "description": "这份 JSON Schema 的地址，给编辑器用",
       "type": "string"
     },
     "enabled": {
-      "description": "插件开关",
       "type": "boolean",
       "default": true
     },
-    "action": {
-      "description": "怎么续跑。message：发一条看得见的消息再接着跑；resend：静默重发同一个请求；stop：不续跑，只提醒",
-      "enum": [
-        "message",
-        "resend",
-        "stop"
-      ],
-      "default": "message"
-    },
-    "prompt": {
-      "description": "message 发的消息，可含 {attempt} {max} {error} {rule}。仅在 action 为 message 时使用",
-      "type": "string",
-      "pattern": "\\S",
-      "maxLength": 500,
-      "default": "继续"
-    },
-    "maxRetries": {
-      "description": "连续失败时最多续跑几次（1–50）。仅在 action 为 message 或 resend 时使用",
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 50,
-      "default": 10
-    },
-    "maxSameError": {
-      "description": "同一个错误最多续跑几次，再出现就彻底停（1–50）。仅在 action 为 message 或 resend 时使用",
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 50,
-      "default": 10
-    },
-    "delay": {
-      "description": "列表按顺序等，最后一个值重复；起步..封顶按次数增长（5s,10s,30s 或 3s..15s）。仅在 action 为 message 或 resend 时使用",
-      "type": "string",
-      "pattern": "^\\s*(\\d+(\\.\\d+)?(ms|s|m)\\.\\.\\d+(\\.\\d+)?(ms|s|m)|\\d+(\\.\\d+)?(ms|s|m)(\\s*,\\s*\\d+(\\.\\d+)?(ms|s|m))*)\\s*$",
-      "default": "3s..15s"
-    },
     "quietStartup": {
-      "description": "启动时的提示（用上了项目级设置、没有可用的规则）：true 不显示，false 照常显示，不写时跟着 pi 的 quietStartup；设置有问题时照样警告。只能写在全局设置",
-      "type": "boolean"
+      "type": "boolean",
+      "description": "仅允许写在全局；未配置时跟随 Pi"
+    },
+    "maxFailures": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "description": "一次恢复过程最多处理多少次失败；超过后停止",
+      "default": 20
+    },
+    "maxHandoffs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 50,
+      "description": "恢复链最多跨会话接管多少次；0 禁止接管",
+      "default": 3
+    },
+    "actionTimeout": {
+      "type": "string",
+      "pattern": "^\\d+(\\.\\d+)?(ms|s|m)$",
+      "description": "单次动作执行时限；超时结果未知，不自动重放",
+      "default": "30s"
     },
     "rules": {
-      "description": "按顺序第一条命中的生效；没命中的错误和空回复不处理",
       "type": "array",
       "items": {
         "$ref": "#/$defs/rule"
@@ -65,92 +45,108 @@
   },
   "$defs": {
     "rule": {
-      "description": "规则需要匹配条件或显式动作；不写 when 或写成 {} 的失败兜底必须显式写 action",
       "type": "object",
       "additionalProperties": false,
-      "anyOf": [
-        {
-          "required": [
-            "action"
-          ]
-        },
-        {
-          "required": [
-            "when"
-          ],
-          "properties": {
-            "when": {
-              "minProperties": 1
-            }
-          }
-        }
+      "required": [
+        "stages"
       ],
       "properties": {
         "name": {
-          "description": "规则名，出现在通知里，不能重名；不写时按位置叫 rule-1、rule-2",
           "type": "string",
           "pattern": "\\S"
         },
         "enabled": {
-          "description": "false 时保留但跳过",
           "type": "boolean",
           "default": true
         },
         "when": {
           "$ref": "#/$defs/when"
         },
-        "action": {
-          "description": "怎么续跑。message：发一条看得见的消息再接着跑；resend：静默重发同一个请求；stop：不续跑，只提醒。覆盖顶层的同名字段",
-          "enum": [
-            "message",
-            "resend",
-            "stop"
-          ]
-        },
-        "prompt": {
-          "description": "message 发的消息，可含 {attempt} {max} {error} {rule}。仅在 action 为 message 时使用。覆盖顶层的同名字段",
-          "type": "string",
-          "pattern": "\\S",
-          "maxLength": 500
-        },
-        "maxRetries": {
-          "description": "连续失败时最多续跑几次（1–50）。仅在 action 为 message 或 resend 时使用。覆盖顶层的同名字段",
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 50
-        },
-        "maxSameError": {
-          "description": "同一个错误最多续跑几次，再出现就彻底停（1–50）。仅在 action 为 message 或 resend 时使用。覆盖顶层的同名字段",
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 50
-        },
-        "delay": {
-          "description": "列表按顺序等，最后一个值重复；起步..封顶按次数增长（5s,10s,30s 或 3s..15s）。仅在 action 为 message 或 resend 时使用。覆盖顶层的同名字段",
-          "type": "string",
-          "pattern": "^\\s*(\\d+(\\.\\d+)?(ms|s|m)\\.\\.\\d+(\\.\\d+)?(ms|s|m)|\\d+(\\.\\d+)?(ms|s|m)(\\s*,\\s*\\d+(\\.\\d+)?(ms|s|m))*)\\s*$"
+        "stages": {
+          "type": "array",
+          "minItems": 1,
+          "description": "minFailures 严格递增；每次失败选择达到下限的最后一个阶段",
+          "prefixItems": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/stage"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "minFailures": {
+                      "const": 1
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "items": {
+            "$ref": "#/$defs/stage"
+          }
         }
       }
     },
     "when": {
-      "description": "命中条件，几项都要满足；不写 failure 就不限制失败类型；不写 when 或写成 {} 时必须显式写 action",
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "failure": {
-          "description": "非空正则，大小写不敏感；普通错误匹配原始文案，缺少文案时匹配「未知错误」，空回复匹配空串。^$ 匹配空回复，.+ 匹配普通错误，.* 匹配所有失败",
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "大小写不敏感的正则；空回复用 ^$，所有失败用 .*"
         },
         "provider": {
-          "description": "通配，只有 * 有特殊含义，大小写不敏感，整串匹配",
           "type": "string",
           "pattern": "\\S"
         },
         "model": {
-          "description": "通配，只有 * 有特殊含义，大小写不敏感，整串匹配",
           "type": "string",
           "pattern": "\\S"
+        }
+      }
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minFailures",
+        "action"
+      ],
+      "properties": {
+        "minFailures": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "阶段生效的连续失败次数下限，包含当前失败"
+        },
+        "delay": {
+          "type": "string",
+          "pattern": "^\\s*(\\d+(\\.\\d+)?(ms|s|m)\\.\\.\\d+(\\.\\d+)?(ms|s|m)|\\d+(\\.\\d+)?(ms|s|m)(\\s*,\\s*\\d+(\\.\\d+)?(ms|s|m))*)\\s*$",
+          "default": "0s",
+          "description": "在当前阶段内按失败次数推进；省略时不等待"
+        },
+        "action": {
+          "$ref": "#/$defs/action"
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "use"
+      ],
+      "properties": {
+        "use": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$"
+        },
+        "with": {
+          "type": "object",
+          "description": "由已加载动作提供的 JSON Schema 校验；不执行隐式类型转换"
         }
       }
     }

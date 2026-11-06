@@ -1,78 +1,33 @@
-// README「常见规则」和 example.json 要能直接用：解析无问题，常见错误落到预期的规则上，两边不走样。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { configWarnings, matchFailure } from "../src/policy/config.ts";
-import { DEFAULT_POLICY } from "../src/policy/policy.ts";
-import { parseConfig } from "./support/config.ts";
-import { empty, err } from "./support/fake-pi.ts";
+import { builtinActions } from "../src/actions/builtins.ts";
+import { ActionRegistry } from "../src/actions/registry.ts";
+import { matchFailure, mergeLayers, parseLayer } from "../src/policy/config.ts";
+import { SCHEMA_URL } from "../src/policy/schema.ts";
+import { err, harness } from "./support/fake-pi.ts";
 
-const readText = (file: string) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
-
-function commonRules(): Record<string, unknown> {
-	const section = readText("README.md").split(/^## .*常见规则\s*$/m)[1];
-	assert.ok(section, "README 里要有「常见规则」一节");
-	const block = /```json\r?\n([\s\S]*?)\r?\n```/.exec(section);
-	assert.ok(block, "「常见规则」里要有一段 json");
-	return JSON.parse(block[1]!);
-}
-
-test("README 常见规则：可直接使用，常见错误各归其位", () => {
-	const config = parseConfig(commonRules());
+const json = (file: string) => JSON.parse(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"));
+const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+test("分发示例可直接解析，所有动作存在且按阶段执行", () => {
+	const h = harness();
+	const registry = new ActionRegistry();
+	registry.discover(h.pi, builtinActions(h.pi));
+	const raw = json("example.json");
+	assert.equal(raw.$schema, SCHEMA_URL);
+	const config = mergeLayers([parseLayer(raw)]);
 	assert.deepEqual(config.problems, []);
-	const cases: [string, string][] = [
-		['429 {"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}', "quota"],
-		["该令牌额度已用尽 (request id: 2026102714)", "quota"],
-		["You have hit your ChatGPT usage limit (plus plan)", "quota"],
-		["prompt is too long: 215000 tokens > 200000 maximum", "context-overflow"],
-		["400 This model's maximum context length is 128000 tokens", "context-overflow"],
-		["401 Invalid API key (request id: 20261027kwpiDrD)", "auth"],
-		['401 {"type":"authentication_error","message":"invalid x-api-key"}', "auth"],
-		["429 Too Many Requests", "rate-limit"],
-		["Rate limit reached for requests", "rate-limit"],
-		["529 overloaded_error", "server"],
-		["502 Bad Gateway", "server"],
-		["当前分组上游负载已饱和，请稍后再试", "server"],
-		["Connection error.", "network"],
-		["fetch failed", "network"],
-		["Request timed out.", "network"],
-		["400 Invalid tool schema", "fallback"],
-	];
-	const hit = (message: string) => matchFailure(config, err(message));
-	for (const [message, rule] of cases) assert.equal(hit(message)?.rule.name, rule, message);
-
-	assert.equal(hit("429 insufficient_quota")?.policy.action, "stop");
-	assert.equal(hit("prompt is too long")?.policy.action, "stop");
-	assert.equal(hit("401 Invalid API key")?.policy.action, "resend");
-	assert.equal(hit("400 Invalid tool schema")?.policy.action, "message");
-
-	const blank = matchFailure(config, empty());
-	assert.equal(blank?.rule.name, "empty", "空回复");
-	assert.equal(blank?.policy.action, "message");
-	assert.equal(blank?.policy.prompt, "继续");
-	assert.equal(hit("")?.rule.name, "fallback", "普通错误缺少文案不落到空回复规则");
-	const withoutEmptyRule = { ...config, rules: config.rules.filter((rule) => rule.name !== "empty") };
-	assert.equal(matchFailure(withoutEmptyRule, empty())?.rule.name, "fallback", "失败兜底也匹配空回复");
+	assert.deepEqual(registry.problems(config), []);
+	assert.equal(matchFailure(config, err("502 Bad Gateway"), 3)?.stage.action.use, "onward.resend");
+	assert.equal(matchFailure(config, err("502 Bad Gateway"), 4)?.stage.action.use, "onward.stop");
 });
-
-test("example.json：解析无问题，顶层参数就是内置默认值，rules 与 README 一致", () => {
-	const example = JSON.parse(readText("example.json"));
-	const config = parseConfig(example);
-	assert.deepEqual(config.problems, []);
-	assert.deepEqual(config.defaults, { ...DEFAULT_POLICY });
-	assert.deepEqual(configWarnings(config), []);
-	assert.deepEqual(example.rules, commonRules().rules);
-	for (const rule of example.rules) {
-		if (rule.when) {
-			assert.equal(typeof rule.when.failure, "string", rule.name);
-			assert.equal("error" in rule.when || "empty" in rule.when, false, rule.name);
-		}
+test("README 完整 JSON 配置均可解析，公共动作入口和文档随包分发", () => {
+	for (const block of readme.matchAll(/```json\n([\s\S]*?)\n```/g)) {
+		const raw = JSON.parse(block[1]!);
+		if (raw.rules) assert.deepEqual(parseLayer(raw).problems, []);
 	}
-	for (const rule of config.rules) {
-		if (rule.patch.maxRetries !== undefined)
-			assert.notEqual(rule.patch.maxSameError, undefined, `${rule.name} 单独设置次数时同时写出同错上限`);
-	}
-	const auth = matchFailure(config, err("401 Invalid API key"))!;
-	assert.equal(auth.policy.maxRetries, 20);
-	assert.equal(auth.policy.maxSameError, 10, "没有放宽同错保护");
+	const manifest = json("package.json");
+	assert.equal(manifest.exports["./actions"], "./src/actions/protocol.ts");
+	assert.ok(manifest.files.includes("docs/"));
+	assert.ok(readme.includes(SCHEMA_URL));
 });

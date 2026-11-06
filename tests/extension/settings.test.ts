@@ -1,159 +1,202 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Settings } from "../../src/extension/settings.ts";
-import { harness, paths, tempDir, writeConfig } from "../support/fake-pi.ts";
+import { err, harness, paths, rule, stage, tempDir, writeConfig } from "../support/fake-pi.ts";
 
 const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
+const start = (h: ReturnType<typeof harness>) => h.emit("session_start", { reason: "startup" });
 
-test("命令改了就存，重新加载还在", async () => {
+test("配置修改持久保存；项目层逐字段覆盖，规则整份替换", async () => {
+	const h = harness({
+		config: { maxFailures: 8, rules: [rule()] },
+		project: { maxFailures: 3, rules: [rule([stage(1, "onward.stop")], "project")] },
+	});
+	await start(h);
+	const projectBefore = readFileSync(h.projectPath, "utf8");
+	assert.match(await h.command("set maxFailures=7 actionTimeout=2s"), /maxFailures\s+7[\s\S]*项目级配置覆盖/);
+	assert.equal(read(h.configPath).maxFailures, 7);
+	assert.equal(readFileSync(h.projectPath, "utf8"), projectBefore);
+	assert.match(await h.command("show"), /maxFailures\s+3（项目级配置）/);
+	assert.match(await h.command("show rules"), /项目级 rules 整份替换全局/);
+	assert.match(await h.command("--scope project unset maxFailures"), /maxFailures\s+7（全局配置）/);
+	await h.boundary(err());
+	assert.match(await h.command("status"), /命中规则\s+project/);
+});
+
+test("先重读再保存，不覆盖用户随后手写的规则和未知内容", async () => {
 	const h = harness();
-	const text = await h.command("set maxRetries=5");
-	assert.match(text, /最多 5 次/);
-	assert.equal(text.split("\n")[1], "改的是全局设置");
-	assert.equal(read(h.configPath).maxRetries, 5);
-	if (process.platform !== "win32") assert.equal(statSync(h.configPath).mode & 0o777, 0o600);
-	const again = harness({ configPath: h.configPath });
-	assert.match(await again.command("status"), /最多 5 次/);
+	await start(h);
+	const updated = [rule([stage(), stage(3, "onward.stop")])];
+	writeConfig({ rules: updated, note: "keep" }, h.configPath);
+	await h.command("set maxFailures=3");
+	assert.deepEqual(read(h.configPath), { maxFailures: 3, note: "keep", rules: updated });
+	assert.match(await h.command("status"), /配置无效/);
+});
+
+test("set 任一参数不合法都不写入、不取消当前等待；帮助与查询也没有副作用", async () => {
+	const h = harness({ config: { rules: [rule([stage(1, "onward.resend", undefined, "5s")])] } });
+	await start(h);
+	const before = readFileSync(h.configPath, "utf8");
+	const waiting = h.boundary(err());
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	for (const command of ["set maxFailures=7 actionTimeout=x", "set maxRetries=3"])
+		assert.match(await h.command(command), /No changes made/);
+	for (const command of ["show", "show rules", "--scope project show", "status", "set --help", "actions"])
+		await h.command(command);
+	assert.match(h.status()!, /等待/);
+	assert.equal(readFileSync(h.configPath, "utf8"), before);
 	await h.command("off");
-	assert.equal(read(h.configPath).enabled, false);
-	assert.match(await h.command("status"), /^💤 onward：关/);
-	await h.command("unset maxRetries");
-	assert.equal("maxRetries" in read(h.configPath), false);
+	await waiting;
+	assert.equal(h.status(), undefined);
+	assert.deepEqual(h.sent, []);
 });
 
-test("只有全局配置时，所有修改命令也明确目标；默认和显式 global 一致", async () => {
-	const rules = [{ name: "any", action: "message" }];
-	const cases: [string, Record<string, unknown>][] = [
-		["on", { enabled: true, maxRetries: 5, rules }],
-		["off", { enabled: false, maxRetries: 5, rules }],
-		["set maxRetries=7", { enabled: false, maxRetries: 7, rules }],
-		["unset maxRetries", { enabled: false, rules }],
-		["reset", { rules }],
-	];
-	for (const prefix of ["", "--scope global "]) {
-		for (const [action, expected] of cases) {
-			const h = harness({ config: { enabled: false, maxRetries: 5, rules } });
-			await h.emit("session_start", { reason: "startup" });
-			const command = `${prefix}${action}`;
-			const text = await h.command(command);
-			const target = action === "reset" ? "已去掉全局的开关和参数，手写的 rules 保留" : "改的是全局设置";
-			assert.equal(text.split("\n")[1], target, command);
-			assert.equal(text.split("\n").filter((line) => line === target).length, 1, "目标不重复提示");
-			assert.deepEqual(read(h.configPath), expected, command);
-			assert.equal(existsSync(h.projectPath), false, "没有误建项目级配置");
-		}
-	}
-});
-
-test("只读命令不带修改目标提示，仍区分合并结果与单层配置", async () => {
-	const h = harness({
-		config: { maxRetries: 5, rules: [{ name: "any", action: "message" }] },
-		project: { maxRetries: 2 },
-	});
-	await h.emit("session_start", { reason: "startup" });
-	const before = [readFileSync(h.configPath, "utf8"), readFileSync(h.projectPath, "utf8")];
-	for (const command of ["status", "show", "show rules", "reload", "--scope global show", "--scope project show"]) {
-		const text = await h.command(command);
-		assert.doesNotMatch(text, /改的是(?:全局|项目级)设置|已去掉(?:全局|项目级)|修改默认写入/, command);
-		if (command === "show") assert.match(text, /^ {2}maxRetries +2（项目级设置）$/m);
-		if (command === "--scope global show") assert.match(text, /^ {2}maxRetries +5$/m);
-		if (command === "--scope project show") assert.match(text, /^ {2}maxRetries +2$/m);
-		if (command === "status" || command === "reload") assert.match(text, /最多 2 次/);
-	}
-	assert.deepEqual([readFileSync(h.configPath, "utf8"), readFileSync(h.projectPath, "utf8")], before);
-});
-
-test("保存不动手写的 rules，也不覆盖加载后才手改的内容", async () => {
-	const rules = [{ name: "auth", when: { failure: "401" } }];
-	const h = harness({ config: { rules } });
-	writeFileSync(h.configPath, JSON.stringify({ enabled: false, maxRetries: 5, rules, note: "hand-edited" }));
-	await h.command("set action=resend");
-	assert.deepEqual(read(h.configPath), {
-		enabled: false,
-		action: "resend",
-		maxRetries: 5,
-		note: "hand-edited",
-		rules,
-	});
-	assert.match(await h.command("status"), /^🛑 onward：关；/, "重新读到了手改的 enabled（note 不认识，算一处问题）");
-});
-
-test("一项不合法就都不改", async () => {
-	const h = harness({ config: { maxRetries: 5 } });
-	const text = await h.command("set maxRetries=7 delay=5");
-	assert.match(text, /未做任何修改/);
-	assert.doesNotMatch(text, /改的是(?:全局|项目级)设置/);
-	assert.deepEqual(read(h.configPath), { maxRetries: 5 });
-});
-
-test("reset 去掉开关和参数，保留手写的 rules", async () => {
+test("配置保存失败明确区分内存与磁盘，不能伪报成功", async () => {
 	const h = harness();
-	await h.command("set maxRetries=5");
-	assert.match(await h.command("reset"), /^💤 onward：开.*\n已去掉全局的开关和参数\n[\s\S]*最多 10 次/);
-	assert.deepEqual(read(h.configPath), {});
-
-	const kept = harness({ config: { enabled: false, maxRetries: 3, rules: [{ name: "a", action: "message" }] } });
-	assert.match(await kept.command("reset"), /手写的 rules 保留/);
-	assert.deepEqual(read(kept.configPath), { rules: [{ name: "a", action: "message" }] });
-});
-
-test("坏 JSON：不续跑、拒绝写、提示", async () => {
-	const path = writeConfig("{ not json");
-	const h = harness({ configPath: path });
-	await h.emit("session_start", { reason: "startup" });
-	assert.deepEqual(h.warnings(), ["🛑 onward：全局设置读不了，修好之前不会自动续跑（/onward show 查看）"]);
-	assert.match(await h.command("show"), /读不了：不是合法 JSON/);
-	assert.match(await h.command("set maxRetries=5"), /读不了（不是合法 JSON.*先修好；未做任何修改$/);
-	assert.doesNotMatch(await h.command("status"), /最多 5 次/, "没有改");
-	assert.match(await h.command("reset"), /未做任何修改$/);
-	assert.equal(readFileSync(path, "utf8"), "{ not json", "原文件没被覆盖");
-	assert.equal(new Settings(paths(path)).reset("global").kind, "broken");
-});
-
-test("顶层不是对象：和坏 JSON 一样，不当成空设置，也不被命令覆盖", async () => {
-	for (const text of ["[]", "null", '"x"']) {
-		const path = writeConfig(text);
-		const h = harness({ configPath: path });
-		await h.emit("session_start", { reason: "startup" });
-		assert.deepEqual(h.warnings(), ["🛑 onward：全局设置读不了，修好之前不会自动续跑（/onward show 查看）"], text);
-		assert.match(await h.command("show"), /读不了：顶层需要是对象/, text);
-		assert.match(await h.command("set maxRetries=5"), /未做任何修改$/, text);
-		assert.equal(readFileSync(path, "utf8"), text, text);
+	await start(h);
+	// Force atomic rename to fail by making the temporary file path a directory.
+	const temp = `${h.configPath}.${process.pid}.tmp`;
+	mkdirSync(temp);
+	try {
+		assert.match(await h.command("set maxFailures=6"), /保存失败[\s\S]*本次运行保留了配置修改/);
+		assert.match(await h.command("show"), /maxFailures\s+6（全局配置，未保存）/);
+		assert.equal(read(h.configPath).maxFailures, undefined);
+		await h.command("reload");
+		const reloaded = await h.command("show");
+		assert.match(reloaded, /maxFailures\s+20（内置默认值）/);
+		assert.doesNotMatch(reloaded, /未保存/);
+	} finally {
+		rmSync(temp, { recursive: true, force: true });
 	}
 });
 
-test("内容有问题：启动和状态都说清不会续跑；命令照常合并写入，修好就生效", async () => {
-	const h = harness({ config: { enabled: "yes", rules: [{ name: "any", action: "message" }] } });
-	await h.emit("session_start", { reason: "startup" });
-	assert.equal(h.warnings()[0], "🛑 onward：全局设置有 1 处问题，修好之前不会自动续跑（/onward show 查看）");
-	assert.match(await h.command("status"), /^🛑 onward：开，但设置文件有 1 处问题/);
-	assert.equal(h.notes.at(-1)![0], "warning");
-	assert.match(await h.command("on"), /^⏩ onward：开，1 条规则生效/);
-	assert.deepEqual(read(h.configPath), { enabled: true, rules: [{ name: "any", action: "message" }] });
-
-	// 关着也提醒：可能就是要关掉的那一项写错了。
-	const off = harness({ config: { enabled: false, maxRetries: 0 } });
-	await off.emit("session_start", { reason: "startup" });
-	assert.match(off.warnings()[0], /^🛑 onward：全局设置有 1 处问题/);
-	assert.match(await off.command("status"), /^🛑 onward：关；设置文件有 1 处问题/);
+test("另一层修改不会丢掉尚未保存的 off，也不会重新启用恢复", async () => {
+	const h = harness();
+	await start(h);
+	const temp = `${h.configPath}.${process.pid}.tmp`;
+	mkdirSync(temp);
+	try {
+		assert.match(await h.command("off"), /保存失败/);
+		await h.command("--scope project set maxFailures=7");
+		assert.equal(await h.boundary(err()), undefined);
+		assert.match(await h.command("status"), /自动恢复\s+已停用/);
+		assert.match(await h.command("show"), /enabled\s+false（全局配置，未保存）/);
+		assert.equal(read(h.configPath).enabled, undefined);
+	} finally {
+		rmSync(temp, { recursive: true, force: true });
+	}
 });
 
-test("show：每个参数的值和来源，再是规则", async () => {
-	const h = harness({
-		config: { action: "resend", delay: "5s,10s", rules: [{ name: "auth", when: { failure: "401" } }] },
-	});
-	const text = await h.command("show");
-	assert.match(text, /action\s+resend（全局设置）/);
-	assert.match(text, /prompt\s+「继续」（内置默认值）/);
-	assert.match(text, /delay\s+5s,10s（全局设置）/);
-	assert.match(text, /^1\. auth\n {3}条件 {2}失败匹配 \/401\/i\n {3}做法 {2}静默重发同一个请求$/m);
-	assert.match(await h.command("show rules"), /^规则（按顺序，第一条命中的生效/);
+test("同层未保存的 set 和 unset 合并，下次成功保存时一并落盘且保留手改规则", async () => {
+	const h = harness({ config: { maxHandoffs: 2, rules: [rule()] } });
+	await start(h);
+	const temp = `${h.configPath}.${process.pid}.tmp`;
+	mkdirSync(temp);
+	try {
+		await h.command("set maxFailures=6");
+		await h.command("unset maxHandoffs");
+		assert.match(await h.command("show"), /maxFailures\s+6（全局配置，未保存）/);
+		assert.match(await h.command("show"), /maxHandoffs\s+3（内置默认值）/);
+	} finally {
+		rmSync(temp, { recursive: true, force: true });
+	}
+	const rules = [rule([stage(), stage(3, "onward.stop")])];
+	writeConfig({ maxHandoffs: 2, rules }, h.configPath);
+	await h.command("set actionTimeout=2s");
+	assert.deepEqual(read(h.configPath), { maxFailures: 6, actionTimeout: "2s", rules });
+	assert.doesNotMatch(await h.command("show"), /未保存/);
 });
 
-test("保存时会建目录", () => {
-	const path = join(tempDir(), "nested", "onward.json");
-	new Settings(paths(path)).update("global", { set: { maxRetries: 3 } });
-	assert.deepEqual(read(path), { maxRetries: 3 });
+test("未保存的项目 unset 持续继承最新全局值，不被另一层保存覆盖", async () => {
+	const h = harness({ config: { maxFailures: 8, rules: [rule()] }, project: { maxFailures: 3 } });
+	await start(h);
+	const temp = `${h.projectPath}.${process.pid}.tmp`;
+	mkdirSync(temp);
+	try {
+		await h.command("--scope project unset maxFailures");
+		await h.command("set maxFailures=9");
+		assert.match(await h.command("show"), /maxFailures\s+9（全局配置）/);
+		assert.match(await h.command("--scope project show"), /未保存/);
+		assert.equal(read(h.projectPath).maxFailures, 3);
+	} finally {
+		rmSync(temp, { recursive: true, force: true });
+	}
+	await h.command("--scope project set maxHandoffs=1");
+	assert.deepEqual(read(h.projectPath), { maxHandoffs: 1 });
+});
+
+test("无法读取的文件拒绝写回，reset 仍取消恢复状态", async () => {
+	const h = harness();
+	await start(h);
+	await h.boundary(err());
+	writeConfig("{ invalid", h.configPath);
+	assert.match(await h.command("set maxFailures=5"), /配置文件无法读取，配置未修改/);
+	assert.match(await h.command("reset"), /配置未修改[\s\S]*本轮恢复状态和计数已重置/);
+	assert.equal(h.status(), undefined);
+	assert.equal(readFileSync(h.configPath, "utf8"), "{ invalid");
+});
+
+test("reset 保留规则，空项目配置不误建；项目层尚未绑定时不写", async () => {
+	const h = harness({ config: { maxFailures: 5, enabled: false, rules: [rule()] } });
+	assert.match(await h.command("--scope project on"), /当前目录尚未确定/);
+	await start(h);
+	await h.command("reset");
+	assert.deepEqual(read(h.configPath), { rules: [rule()] });
+	await h.command("--scope project reset");
+	await h.command("--scope project unset maxFailures");
+	assert.equal(existsSync(h.projectPath), false);
+});
+
+test("show 使用加载时快照，单层查询不被另一层错误阻断", async () => {
+	const h = harness({ config: { maxFailures: 5, rules: [rule()] }, project: { maxFailures: 0 } });
+	await start(h);
+	assert.match(await h.command("show"), /配置无效/);
+	assert.match(await h.command("--scope global show"), /仅本层配置[\s\S]*maxFailures\s+5/);
+	writeConfig({ maxFailures: 9 }, h.configPath);
+	assert.match(await h.command("--scope global show"), /maxFailures\s+5/);
+});
+
+test("on/off 简洁报告目标范围，项目覆盖准确，quietStartup 跟随 Pi", async () => {
+	const h = harness({ project: { enabled: true } });
+	await start(h);
+	assert.match(await h.command("off"), /已停用自动恢复（全局配置）[\s\S]*当前项目仍启用/);
+	assert.equal(await h.command("--scope project off"), "onward：已停用自动恢复（项目级配置）");
+	for (const quietStartup of [true, "header"]) {
+		const quiet = harness({ config: {}, piSettings: { quietStartup } });
+		await start(quiet);
+		assert.deepEqual(quiet.notes, []);
+	}
+	const invalid = harness({ config: { quietStartup: true, maxFailures: 0 } });
+	await start(invalid);
+	assert.equal(invalid.warnings().length, 1);
+});
+
+test("非法 JSON 的底层报错使用英文并保留解析器原因", () => {
+	const file = writeConfig("{ invalid");
+	const settings = new Settings(paths(file));
+	assert.match(settings.config.problems[0]!, /^Invalid JSON: /);
+	const saved = settings.update("global", { enabled: true });
+	assert.ok(saved.kind === "broken");
+	assert.match(saved.error, /^Invalid JSON: /);
+	assert.doesNotMatch(saved.error, /\p{Script=Han}/u);
+	assert.equal(readFileSync(file, "utf8"), "{ invalid");
+});
+
+test("设置文件读写模块拒绝非对象 JSON，嵌套目录可自动创建", () => {
+	for (const raw of ["[]", "null", '"x"']) {
+		const file = writeConfig(raw);
+		const settings = new Settings(paths(file));
+		assert.deepEqual(settings.update("global", { enabled: true }), {
+			kind: "broken",
+			path: file,
+			error: "Top-level configuration must be a JSON object",
+		});
+		assert.deepEqual(settings.config.problems, ["Top-level configuration must be a JSON object"]);
+		assert.equal(readFileSync(file, "utf8"), raw);
+	}
+	const file = join(tempDir(), "nested", "onward.json");
+	assert.equal(new Settings(paths(file)).update("global", { set: { maxFailures: 3 } }).kind, "saved");
+	assert.deepEqual(read(file), { maxFailures: 3 });
 });

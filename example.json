@@ -1,75 +1,36 @@
 {
   "$schema": "https://raw.githubusercontent.com/cobia68/pi-onward/main/onward.schema.json",
   "enabled": true,
-  "action": "message",
-  "prompt": "继续",
-  "maxRetries": 10,
-  "maxSameError": 10,
-  "delay": "3s..15s",
+  "maxFailures": 20,
+  "maxHandoffs": 3,
+  "actionTimeout": "30s",
   "rules": [
     {
       "name": "quota",
       "when": {
-        "failure": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|usage limit|余额不足|额度不足|额度已用尽"
+        "failure": "insufficient[\\s_-]*quota|exceeded your current quota|quota exceeded|out of budget|billing|余额不足|额度不足"
       },
-      "action": "stop"
+      "stages": [
+        { "minFailures": 1, "action": { "use": "onward.stop", "with": { "reason": "额度问题需要处理后再继续" } } }
+      ]
     },
     {
-      "name": "context-overflow",
+      "name": "transient",
       "when": {
-        "failure": "context[\\s_-]*(length|window)|prompt (is )?too long|maximum context|request_too_large"
+        "failure": "\\b(401|429|500|502|503|504|529)\\b|connection|network|fetch failed|timed? ?out|overloaded"
       },
-      "action": "stop"
-    },
-    {
-      "name": "auth",
-      "when": {
-        "failure": "\\b401\\b|unauthorized|authentication|invalid[\\s_-]*(x-)?(api[\\s_-]*)?(key|token)"
-      },
-      "action": "resend",
-      "maxRetries": 20,
-      "maxSameError": 10,
-      "delay": "3s..10s"
-    },
-    {
-      "name": "rate-limit",
-      "when": {
-        "failure": "\\b429\\b|rate[\\s_-]*limit|too many requests|resource[\\s_-]*exhausted"
-      },
-      "action": "resend",
-      "maxRetries": 5,
-      "maxSameError": 10,
-      "delay": "30s,1m,2m"
-    },
-    {
-      "name": "server",
-      "when": {
-        "failure": "\\b(500|502|503|504|520|524|529)\\b|overloaded|server[\\s_-]*error|internal[\\s_-]*error|bad gateway|service[\\s_-]*unavailable|upstream|负载已饱和"
-      },
-      "action": "resend"
-    },
-    {
-      "name": "network",
-      "when": {
-        "failure": "connection|network|econnreset|econnrefused|etimedout|socket hang up|fetch failed|timed? ?out|terminated"
-      },
-      "action": "resend"
+      "stages": [
+        { "minFailures": 1, "delay": "3s..15s", "action": { "use": "onward.resend" } },
+        { "minFailures": 4, "action": { "use": "onward.stop", "with": { "reason": "连续失败 4 次，请检查服务或配置恢复插件动作" } } }
+      ]
     },
     {
       "name": "empty",
-      "when": {
-        "failure": "^$"
-      },
-      "action": "message",
-      "maxRetries": 3,
-      "maxSameError": 10
-    },
-    {
-      "name": "fallback",
-      "action": "message",
-      "prompt": "上一步失败了（{error}），接着做",
-      "maxRetries": 3,
-      "maxSameError": 2
+      "when": { "failure": "^$" },
+      "stages": [
+        { "minFailures": 1, "delay": "3s", "action": { "use": "onward.message", "with": { "prompt": "请继续执行任务：\n{taskPrompt}" } } },
+        { "minFailures": 3, "action": { "use": "onward.stop" } }
+      ]
     }
   ]
 }
