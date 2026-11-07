@@ -21,8 +21,8 @@ try {
 				{
 					name: "server",
 					stages: [
-						{ minFailures: 1, action: { use: "onward.resend" } },
-						{ minFailures: 3, action: { use: "onward.command", with: { name: "fixture", args: "opaque args" } } },
+						{ minFailures: 1, action: { use: "pi.message", with: { prompt: "{taskPrompt}" } } },
+						{ minFailures: 3, action: { use: "pi.command", with: { name: "fixture", args: "opaque args" } } },
 					],
 				},
 			],
@@ -46,7 +46,8 @@ try {
 				scope: "temporary",
 			},
 		}));
-	runtime.appendEntry = () => {};
+	const entries = [];
+	runtime.appendEntry = (customType, data) => entries.push({ type: "custom", customType, data });
 	runtime.sendUserMessage = (text, options) => {
 		assert.equal(options.expandPromptTemplates, true);
 		deferred.push(text);
@@ -65,7 +66,7 @@ try {
 		isIdle: () => true,
 		hasPendingMessages: () => false,
 		signal: undefined,
-		sessionManager: { getSessionId: () => "loader-session", getBranch: () => [] },
+		sessionManager: { getSessionId: () => "loader-session", getBranch: () => entries },
 		ui: {
 			notify: (message) => notes.push(message),
 			addAutocompleteProvider: () => {},
@@ -78,11 +79,21 @@ try {
 			result = await handler({ type: event, ...payload }, ctx);
 		return result;
 	};
+	const user = async (text, source) => {
+		await emit("input", { text, source });
+		await emit("before_agent_start", { messageType: "user", prompt: text });
+		const message = { role: "user", content: text, timestamp: entries.length };
+		await emit("message_end", { message });
+		entries.push({ type: "message", message });
+	};
 	await emit("session_start", { reason: "startup" });
 	await command.handler("actions", ctx);
-	assert.match(notes.at(-1), /onward.command/);
+	assert.match(notes.at(-1), /pi\.message/);
+	assert.match(notes.at(-1), /pi\.command/);
+	assert.doesNotMatch(notes.at(-1), /onward\.(message|command|resend)/);
 	await command.handler("show", ctx);
-	assert.match(notes.at(-1), /从第 3 次失败：onward.command/);
+	assert.match(notes.at(-1), /从第 3 次失败：pi\.command/);
+	await user("fixture task", "interactive");
 	for (let failure = 1; failure <= 3; failure++) {
 		const message = {
 			role: "assistant",
@@ -100,7 +111,9 @@ try {
 		});
 		if (failure < 3) {
 			assert.equal(result.continue, true);
-			assert.equal(result.entries[0].targetId, `e${failure}`);
+			assert.equal(result.entries.length, 1);
+			assert.equal(result.entries[0].type, "custom_message");
+			assert.equal(result.entries[0].content, "fixture task");
 			await emit("agent_start");
 		} else assert.equal(result, undefined);
 	}
@@ -113,17 +126,15 @@ try {
 	await command.handler("status", ctx);
 	assert.match(notes.at(-1), /连续失败\s+3 次[\s\S]*已分派，业务结果未知/);
 	assert.ok(extension.messageRenderers.has("pi-onward"));
-	assert.ok(statuses.some((value) => value?.includes("onward.command")));
+	assert.ok(statuses.some((value) => value?.includes("pi.command")));
 	writeFileSync(
 		join(scratch, "onward.json"),
 		JSON.stringify({
-			rules: [
-				{ stages: [{ minFailures: 1, action: { use: "onward.message", with: { prompt: "继续{taskPrompt}" } } }] },
-			],
+			rules: [{ stages: [{ minFailures: 1, action: { use: "pi.message", with: { prompt: "继续{taskPrompt}" } } }] }],
 		}),
 	);
 	await command.handler("reload", ctx);
-	await emit("input", { source: "rpc", text: "检查 {error} 和 $&" });
+	await user("检查 {error} 和 $&", "rpc");
 	for (let failure = 1; failure <= 2; failure++) {
 		const result = await emit("agent_before_settle", {
 			outcome: "error",
@@ -149,7 +160,7 @@ try {
 	writeFileSync(
 		join(scratch, ".pi", "onward.json"),
 		JSON.stringify({
-			rules: [{ stages: [{ minFailures: 1, action: { use: "onward.command", with: { name: "fixture" } } }] }],
+			rules: [{ stages: [{ minFailures: 1, action: { use: "pi.command", with: { name: "fixture" } } }] }],
 		}),
 	);
 	trusted = false;

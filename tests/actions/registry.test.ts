@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { builtinActions } from "../../src/actions/builtins.ts";
 import { type ActionDefinition, provideAction } from "../../src/actions/protocol.ts";
 import { ActionRegistry } from "../../src/actions/registry.ts";
 import { err, harness, rule, stage } from "../support/fake-pi.ts";
@@ -50,6 +51,25 @@ test("动作提供者不依赖加载顺序，发现后可校验并执行参数",
 		assert.deepEqual(h.sent, ["7:1"]);
 		assert.match(await h.command("actions"), /test\.record/);
 	}
+});
+
+test("Pi 适配动作自动注册、校验参数，旧名称不作为兼容别名", () => {
+	const h = harness();
+	const registry = new ActionRegistry();
+	registry.discover(h.pi, builtinActions(h.pi));
+	assert.deepEqual(
+		registry
+			.list()
+			.map((definition) => definition.name)
+			.sort(),
+		["onward.stop", "pi.command", "pi.message"],
+	);
+	assert.equal(registry.check({ use: "pi.message", with: { prompt: "继续{taskPrompt}" } }), undefined);
+	assert.equal(registry.check({ use: "pi.command", with: { name: "fixture", args: "opaque" } }), undefined);
+	assert.match(registry.check({ use: "pi.message", with: { prompt: 1 } })!, /Invalid parameters for pi\.message/);
+	assert.match(registry.check({ use: "pi.command" })!, /Invalid parameters for pi\.command/);
+	for (const use of ["onward.message", "onward.command", "onward.resend"])
+		assert.equal(registry.check({ use }), `Action ${use} is not loaded or failed to register`);
 });
 
 test("参数无效会在配置加载时阻断整个配置", async () => {
@@ -115,7 +135,7 @@ test("重名动作只隔离冲突名称，引用冲突动作的配置仍然整�
 		assert.equal(!!(await h.boundary(err()))?.continue, !referenced);
 		assert.match(await h.command("actions"), /test\.record[^\n]*Duplicate action name/);
 		assert.equal(/配置无效/.test(await h.command("show")), referenced);
-		assert.deepEqual(h.sent, []);
+		assert.deepEqual(h.sent, referenced ? [] : ["继续"]);
 	}
 });
 

@@ -20,7 +20,7 @@
         "failure": "\\b(401|429|500|502|503|504|529)\\b|connection|network|fetch failed|timed? ?out|overloaded"
       },
       "stages": [
-        { "minFailures": 1, "delay": "3s..15s", "action": { "use": "onward.resend" } },
+        { "minFailures": 1, "delay": "3s..15s", "action": { "use": "pi.message", "with": { "prompt": "{taskPrompt}" } } },
         { "minFailures": 4, "action": { "use": "onward.stop", "with": { "reason": "连续失败 4 次，请检查服务或配置恢复插件动作" } } }
       ]
     },
@@ -28,7 +28,7 @@
       "name": "empty",
       "when": { "failure": "^$" },
       "stages": [
-        { "minFailures": 1, "delay": "3s", "action": { "use": "onward.message", "with": { "prompt": "请继续执行任务：\n{taskPrompt}" } } },
+        { "minFailures": 1, "delay": "3s", "action": { "use": "pi.message", "with": { "prompt": "请继续执行任务：\n{taskPrompt}" } } },
         { "minFailures": 3, "action": { "use": "onward.stop" } }
       ]
     }

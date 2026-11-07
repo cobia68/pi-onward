@@ -1,6 +1,6 @@
 # 动作提供者协议
 
-普通插件命令使用 `onward.command`，目标插件只需已在 Pi 中注册命令，不需要实现本文的协议。本文用于独立桥接扩展或插件主动提供结构化能力。
+普通插件命令使用 `pi.command`，目标插件只需已在 Pi 中注册命令，不需要实现本文的协议。`pi.message` 和 `pi.command` 由 onward 内置的 Pi 适配模块注册，无需额外安装；这两个名称属于 onward 的动作命名空间，并非 Pi 官方 API。本文用于独立桥接扩展或插件主动提供结构化能力。
 
 ## 发现与加载
 
@@ -54,7 +54,7 @@ export default function (pi: ExtensionAPI) {
 | `failures` | 本次恢复过程中的连续失败次数 |
 | `minFailures` | 所选阶段的连续失败次数下限，包含当前失败 |
 | `failure` | 只读失败快照：kind、text、provider、model |
-| `taskPrompt` | 可选的任务提示词文本快照；用于 `{taskPrompt}`，自动续跑不覆盖来源 |
+| `taskPrompt` | 可选的已接收任务文本快照；用于 `{taskPrompt}`，自动消息保留来源，重载后按会话记录重建 |
 | `chain` | 只读恢复链：id、handoffs、maxHandoffs |
 | `signal` | 合并取消及动作执行时限的信号 |
 
@@ -92,6 +92,6 @@ pi.events.emit("onward:resume-recovery", {
 });
 ```
 
-onward 在工厂初始化时已监听此事件，支持在它自己的 session_start 之前或之后收到。错误的会话 ID 不生效。人工新任务或正常模型进展结束恢复链；自动注入的消息保留当前链。
+onward 在工厂初始化时已监听此事件，支持在它自己的 session_start 之前或之后收到。错误的会话 ID 不生效。已接收的人工新任务或正常模型进展结束恢复链；自动注入的消息保留当前链。
 
 通用 slash 命令没有上述约定，也没有业务结果回执，因此不能推断恢复链已传递。跨会话或跨进程的防循环由目标扩展负责。独立桥接扩展也不能通过包装命令声称获得了命令没有公开的确认、取消或去重能力。

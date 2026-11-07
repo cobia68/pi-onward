@@ -26,11 +26,11 @@ test("Schema 接受新结构，拒绝旧平铺策略与非法动作结构", () =
 		assert.equal(validate(raw), false, JSON.stringify(raw));
 });
 test("Schema 和读取器使用 minFailures，拒绝旧字段及新旧字段混用", () => {
-	const current = { rules: [{ stages: [{ minFailures: 1, action: { use: "onward.message" } }] }] };
+	const current = { rules: [{ stages: [{ minFailures: 1, action: { use: "pi.message" } }] }] };
 	assert.equal(validate(current), true, JSON.stringify(validate.errors));
 	assert.deepEqual(parseLayer(current).problems, []);
 	for (const threshold of [{ fromFailure: 1 }, { minFailures: 1, fromFailure: 1 }]) {
-		const legacy = { rules: [{ stages: [{ ...threshold, action: { use: "onward.message" } }] }] };
+		const legacy = { rules: [{ stages: [{ ...threshold, action: { use: "pi.message" } }] }] };
 		assert.equal(validate(legacy), false);
 		assert.ok(parseLayer(legacy).problems.includes("rules[0].stages[0].fromFailure is not a recognized field"));
 	}

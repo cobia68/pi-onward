@@ -16,7 +16,7 @@ const start = (h: ReturnType<typeof harness>) => h.emit("session_start", { reaso
 
 test("已有扩展命令只分派一次，原样保留参数且不送给模型", async () => {
 	const h = harness({
-		config: { rules: [rule([stage(1, "onward.command", { name: "fixture", args: '--dry-run -- 接着做 "任务"' })])] },
+		config: { rules: [rule([stage(1, "pi.command", { name: "fixture", args: '--dry-run -- 接着做 "任务"' })])] },
 	});
 	const calls: string[] = [];
 	h.pi.registerCommand("fixture", {
@@ -36,7 +36,7 @@ test("已有扩展命令只分派一次，原样保留参数且不送给模型",
 
 test("不存在、内置或自调用命令明确失败，不降级为普通提示词", async () => {
 	for (const name of ["missing", "model", "onward", "onward:2"]) {
-		const h = harness({ config: { rules: [rule([stage(1, "onward.command", { name })])] } });
+		const h = harness({ config: { rules: [rule([stage(1, "pi.command", { name })])] } });
 		await start(h);
 		await h.boundary(err());
 		assert.deepEqual(h.sent, []);
@@ -81,7 +81,7 @@ test("异常、非法返回及超时均报告结果未知，不自动执行下�
 		});
 		const h = harness({
 			actions: [action],
-			config: { actionTimeout: "15ms", rules: [rule([stage(1, action.name), stage(2, "onward.resend")])] },
+			config: { actionTimeout: "15ms", rules: [rule([stage(1, action.name), stage(2, "pi.message")])] },
 		});
 		await start(h);
 		await h.boundary(err());
@@ -108,7 +108,7 @@ test("落定观察者中出现用户消息、关闭或重载时，已排队内�
 		});
 		const h = harness({ actions: [action], config: { rules: [rule([stage(1, action.name)])] } });
 		h.pi.on("agent_settled", async () => {
-			if (cancel === "input") await h.emit("input", { source: "interactive", text: "new" });
+			if (cancel === "input") await h.user("new");
 			else await h.command(cancel);
 		});
 		await start(h);
@@ -132,7 +132,7 @@ test("执行中的取消通知动作，迟到结果不覆盖新任务状态", as
 	const work = h.boundary(err());
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	assert.ok(context);
-	await h.emit("input", { source: "interactive", text: "new task" });
+	await h.user("new task");
 	assert.equal(context.signal.aborted, true);
 	finish?.({ kind: "completed" });
 	await work;
@@ -163,11 +163,11 @@ test("恢复链在任一 session_start 顺序恢复，错误会话消息无效�
 			sessionId: "other",
 			chain: { id: "wrong", handoffs: 0, maxHandoffs: 10 },
 		});
-		await h.emit("input", { source: "extension", text: "continue" });
+		await h.user("continue", "extension");
 		await h.boundary(err());
 		assert.equal(calls, 0);
 		assert.match(await h.command("status"), /达到跨会话接管上限 2 次/);
-		await h.emit("input", { source: "interactive", text: "new" });
+		await h.user("new");
 		await h.boundary(err());
 		assert.equal(calls, 1);
 	}

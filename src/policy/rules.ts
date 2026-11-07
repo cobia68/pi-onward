@@ -120,7 +120,7 @@ function parseStages(raw: unknown, label: string, problems: string[]): Stage[] {
 		}
 		unknownKeys(action, new Set(["use", "with"]), `${at}.action`, problems);
 		if (typeof action.use !== "string" || !new RegExp(ACTION_NAME_PATTERN).test(action.use))
-			problems.push(`${at}.action.use must be a qualified action name such as onward.resend`);
+			problems.push(`${at}.action.use must be a qualified action name such as pi.message`);
 		if (action.with !== undefined && !isRecord(action.with)) problems.push(`${at}.action.with must be an object`);
 		if (problems.length === before && typeof delay !== "string")
 			stages.push({

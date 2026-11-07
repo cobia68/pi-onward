@@ -1,6 +1,6 @@
 {
   "name": "@cobia/pi-onward",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "pi 出错或空回复时，按阶段策略恢复并调用扩展命令或具名动作",
   "keywords": [
     "pi",

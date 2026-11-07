@@ -13,7 +13,7 @@ test("minFailures 包含当前失败，每次只选择已达到下限的最后�
 	const result = parse([
 		{
 			stages: [
-				{ minFailures: 1, action: { use: "onward.resend" } },
+				{ minFailures: 1, action: { use: "pi.message" } },
 				{ minFailures: 3, action: { use: "respawn.restart" } },
 				{ minFailures: 5, action: { use: "onward.stop" } },
 			],
@@ -28,7 +28,7 @@ test("minFailures 包含当前失败，每次只选择已达到下限的最后�
 	);
 	assert.deepEqual(
 		selected.map((stage) => stage.action.use),
-		["onward.resend", "onward.resend", "respawn.restart", "respawn.restart", "onward.stop", "onward.stop"],
+		["pi.message", "pi.message", "respawn.restart", "respawn.restart", "onward.stop", "onward.stop"],
 	);
 });
 test("第一阶段必须从 1 开始、阈值严格递增、动作仅接受 use/with", () => {
@@ -42,7 +42,7 @@ test("第一阶段必须从 1 开始、阈值严格递增、动作仅接受 use/
 		[{ minFailures: 1, action: "resend" }],
 		[stage(1, "bad")],
 		[{ ...stage(), delay: "x" }],
-		[{ minFailures: 1, action: { use: "onward.resend", with: [] } }],
+		[{ minFailures: 1, action: { use: "pi.message", with: [] } }],
 	]) {
 		const result = parse([{ stages }]);
 		assert.ok(result.problems.length, JSON.stringify(stages));
@@ -55,7 +55,7 @@ test("规则按顺序匹配，停用规则跳过，失败/供应商/模型条件
 	const { rules, problems } = parse([
 		{ ...rule([stage(1, "onward.stop")], "disabled"), enabled: false },
 		{ ...rule([stage()], "auth"), when: { failure: "401", provider: "TEST-*", model: "test-model" } },
-		rule([stage(1, "onward.message")], "fallback"),
+		rule([stage(1, "pi.message")], "fallback"),
 	]);
 	assert.deepEqual(problems, []);
 	assert.equal(findRule(rules, err("401"))?.name, "auth");

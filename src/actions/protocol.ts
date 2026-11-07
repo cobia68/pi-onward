@@ -40,7 +40,7 @@ interface Execution {
 	failures: number;
 	minFailures: number;
 	failure: Readonly<FailureSnapshot>;
-	/** Task input text, kept stable across automatically generated continuation messages. */
+	/** Accepted task text, rebuilt from persisted input origins and stable across automatic continuations. */
 	taskPrompt?: string;
 	chain: Readonly<RecoveryChain>;
 	signal: AbortSignal;

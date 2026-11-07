@@ -36,7 +36,7 @@ test("先重读再保存，不覆盖用户随后手写的规则和未知内容",
 });
 
 test("set 任一参数不合法都不写入、不取消当前等待；帮助与查询也没有副作用", async () => {
-	const h = harness({ config: { rules: [rule([stage(1, "onward.resend", undefined, "5s")])] } });
+	const h = harness({ config: { rules: [rule([stage(1, "pi.message", undefined, "5s")])] } });
 	await start(h);
 	const before = readFileSync(h.configPath, "utf8");
 	const waiting = h.boundary(err());

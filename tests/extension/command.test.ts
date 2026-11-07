@@ -103,7 +103,7 @@ test("菜单默认改全局，选项目 set 时只填项目命令；取消不执
 });
 
 test("status 区分待提交与已启动，show 只看配置，状态不会发送到模型", async () => {
-	const h = harness({ config: { rules: [rule([stage(1, "onward.message", { prompt: "继续\n工作" })])] } });
+	const h = harness({ config: { rules: [rule([stage(1, "pi.message", { prompt: "继续\n工作" })])] } });
 	await h.emit("session_start", { reason: "startup" });
 	assert.doesNotMatch(await h.command("status"), /连续失败|已启动续跑|onward\.json/);
 	await h.emit("agent_before_settle", boundaryEvent(err()));

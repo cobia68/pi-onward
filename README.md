@@ -6,7 +6,7 @@
 
 </div>
 
-pi-onward 只处理两类失败：Pi 明确以错误结束，或者正常结束但没有文字、工具调用。规则先匹配失败，再根据连续失败次数选择恢复阶段。每个阶段引用一个具名动作；内置重发、发消息、停止、调用扩展命令，以及其他插件提供的结构化能力，都走同一套动作接口。
+pi-onward 只处理两类失败：Pi 明确以错误结束，或者正常结束但没有文字、工具调用。规则先匹配失败，再根据连续失败次数选择恢复阶段。每个阶段引用一个具名动作；内置发消息、调用扩展命令、停止，以及其他插件提供的结构化能力，都走同一套动作接口。
 
 ## 安装
 
@@ -37,12 +37,15 @@ pi-onward 本身没有默认规则。复制包里的 [`example.json`](example.js
         {
           "minFailures": 1,
           "delay": "3s",
-          "action": { "use": "onward.resend" }
+          "action": {
+            "use": "pi.message",
+            "with": { "prompt": "{taskPrompt}" }
+          }
         },
         {
           "minFailures": 3,
           "action": {
-            "use": "onward.command",
+            "use": "pi.command",
             "with": {
               "name": "example-command",
               "args": "-- 继续执行当前任务"
@@ -55,9 +58,9 @@ pi-onward 本身没有默认规则。复制包里的 [`example.json`](example.js
 }
 ```
 
-这条规则的行为是：第 1、2 次失败重发，第 3 次失败后在当前轮次落定，再调用扩展命令。`example-command` 是占位名称，需要替换成实际已加载的命令，`args` 按目标命令的参数格式填写。第一阶段的 `minFailures` 必须是 1，之后严格递增。旧字段 `fromFailure` 已移除，需要改为 `minFailures`。
+这条规则的行为是：第 1、2 次失败发送任务提示词续跑，第 3 次失败后在当前轮次落定，再调用扩展命令。`example-command` 是占位名称，需要替换成实际已加载的命令，`args` 按目标命令的参数格式填写。第一阶段的 `minFailures` 必须是 1，之后严格递增。
 
-`onward.command` 确认目标是已加载的扩展命令，再通过 Pi 分派。`args` 原样传给命令，不经过 shell、不替换 onward 模板，也不需要模型来执行。`/model` 等 Pi 内置交互命令不属于扩展命令，不支持这个入口。
+`pi.command` 确认目标是已加载的扩展命令，再通过 Pi 分派。`args` 原样传给命令，不经过 shell、不替换 onward 模板，也不需要模型来执行。`/model` 等 Pi 内置交互命令不属于扩展命令，不支持这个入口。
 
 结果只能保证“已分派”，不能保证目标插件的业务操作已成功，也不能强制取消已经进入命令处理器的操作。需要结构化结果或恢复链传递时，可以加载提供动作的独立桥接扩展，或让插件选择实现动作协议：
 
@@ -75,25 +78,30 @@ pi-onward 本身没有默认规则。复制包里的 [`example.json`](example.js
 
 ## 内置动作
 
+`pi.message` 和 `pi.command` 由 onward 内置的 Pi 适配模块提供，加载 onward 后自动注册，无需另外安装。`pi` 表示对接 Pi 的动作命名空间，并非 Pi 官方 API。
+
 | 动作 | 阶段 | 作用 |
 | --- | --- | --- |
-| `onward.resend` | `boundary` | 从模型上下文省略失败回复，重发请求 |
-| `onward.message` | `boundary` | 追加一条自定义消息并继续；`prompt` 支持 `{failures}`、`{rule}`、`{error}`、`{taskPrompt}` |
+| `pi.message` | `boundary` | 追加一条自定义消息并继续；`prompt` 支持 `{failures}`、`{rule}`、`{error}`、`{taskPrompt}` |
+| `pi.command` | `settled` | 在当前轮次落定后调用已加载的扩展命令 |
 | `onward.stop` | `boundary` | 停止当前恢复过程 |
-| `onward.command` | `settled` | 在当前轮次落定后调用已加载的扩展命令 |
+
+`pi.message` 在 `agent_before_settle` 提交消息和继续运行的提议；`pi.command` 在所有 `agent_settled` 观察者完成后，通过 `pi.sendUserMessage()` 的命令分派机制调用目标。目标扩展使用 `pi.registerCommand()` 注册命令，不需要实现 onward 动作协议。
 
 `prompt` 默认是 `继续`，所有变量都使用 `{变量名}`，可以与正文拼接。`{taskPrompt}` 替换为本轮任务的提示词文本，例如：
 
 ```json
 {
-  "use": "onward.message",
+  "use": "pi.message",
   "with": { "prompt": "请重新尝试：\n{taskPrompt}" }
 }
 ```
 
-上次输入为 `检查并修复登录接口` 时，会追加 `请重新尝试：` 换行后接该输入。`"prompt": "{taskPrompt}"` 只发送原提示词，`"prompt": "继续{taskPrompt}"` 则在前面加上“继续”。这会追加新消息；独立的 `onward.resend` 仍表示省略失败回复后静默重发请求。
+上次输入为 `检查并修复登录接口` 时，会追加 `请重新尝试：` 换行后接该输入。重发任务提示词使用 `pi.message`：`"prompt": "{taskPrompt}"` 发送原提示词，`"prompt": "继续{taskPrompt}"` 则在前面加上“继续”。两种写法都会追加一条新消息。
 
-人工或 RPC 新输入会更新 `{taskPrompt}` 的来源，记录的是输入事件中的文本（Pi 技能和提示词模板展开前）。自动续跑不覆盖来源；新会话首次由扩展发起任务时，以该输入为来源。恢复会话或切换分支时，从当前分支最近的用户消息中提取文本，跳过 onward 的自定义续跑消息。仅复用文字，不复制图片附件或整个请求上下文。没有可复用的任务文本时，使用 `{taskPrompt}` 的动作会明确失败并停止本次恢复。
+`{taskPrompt}` 使用真正进入会话的用户消息文本，包含输入扩展改写、Pi 技能及提示词模板展开后的结果。人工或 RPC 消息被接收后才更新任务来源和恢复计数；被扩展拦截、尚未消费或已取消的输入不会成为新任务。自动续跑保留原任务；新会话首次由扩展发起任务时，以该消息为任务来源。
+
+onward 随已接收的用户消息保存来源记录，记录不包含提示词正文，也不进入模型上下文。重载、恢复会话或切换分支时，根据当前分支的来源记录重建任务，不把自动续跑消息当成新任务。仅复用文字，不复制图片附件或整个请求上下文。缺少任务文本、来源记录或无法确定排队消息来源时，使用 `{taskPrompt}` 的动作会明确失败并停止本次恢复。
 
 模板只替换一次：原提示词或错误信息中包含的 `{error}`、`{taskPrompt}` 等文字保持原样。未知变量保持原文。
 
@@ -140,7 +148,7 @@ export default function (pi: ExtensionAPI) {
 
 动作有两种执行阶段：
 
-- `boundary`：在 `agent_before_settle` 中返回下一轮提议，适合 `resend` 和 `message`。
+- `boundary`：在 `agent_before_settle` 中返回下一轮提议，例如 `pi.message`。
 - `settled`：等 Pi 完全落定后执行，适合命令、会话切换、重启和外部副作用。
 
 动作结果分为继续、完成、已分派、已接管、停止、失败、取消和未知。动作超时、抛出异常或返回非法结果时，结果标记为未知，不会自动重放可能已经产生副作用的动作。
@@ -153,7 +161,7 @@ export default function (pi: ExtensionAPI) {
 - `maxHandoffs`：恢复链最多跨 session 接管的次数，默认 3；0 表示禁止接管。
 - `actionTimeout`：单次动作执行时限，默认 30 秒。等待 `delay` 不计入动作时限。
 
-正常模型回复一次（包括工具轮）会结束恢复过程。人工新任务、Esc、关闭、重载、切换分支和配置修改会取消未执行动作；其中 Esc 保留本次失败的诊断状态。扩展自动发送的续跑消息不会清空当前恢复过程。这里的一次失败是 `agent_before_settle` 看到的最终结果，不包含 Pi 内建重试期间的每个 HTTP 请求。
+正常模型回复一次（包括工具轮）会结束恢复过程。已接收的人工新任务、Esc、关闭、重载、切换分支和配置修改会取消未执行动作；其中 Esc 保留本次失败的诊断状态。扩展自动发送的续跑消息不会清空当前恢复过程。这里的一次失败是 `agent_before_settle` 看到的最终结果，不包含 Pi 内建重试期间的每个 HTTP 请求。
 
 带 `handoff: true` 的动作在调用前预留一次接管预算。明确失败、取消或只完成预览时退回预算；超时或异常结果未知时保留。动作提供者必须通过自己的持久交接保存恢复链，并在目标会话启动时恢复，详见[动作协议](docs/actions.md)。
 
@@ -234,4 +242,4 @@ npm run check:extension
 
 扩展动作属于进程内协议，插件的 npm 包仍由 Pi 安装和加载。只加载你信任的扩展。
 
-测试使用隔离配置和本地注册的测试命令、动作，不依赖其他扩展，不读取真实凭据，也不调用外部模型。
+测试使用隔离配置、真实 Pi 输入链和本地模型响应，不依赖其他扩展，不读取真实凭据，也不调用外部模型。

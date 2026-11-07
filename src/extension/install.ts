@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { CUSTOM_TYPE } from "../actions/builtins.ts";
+import { CUSTOM_TYPE } from "../actions/pi.ts";
 import { Recovery } from "../runtime/recovery.ts";
 import { argumentTabCompletion } from "./autocomplete.ts";
 import { registerCommand } from "./command.ts";
@@ -21,6 +21,7 @@ export function install(pi: ExtensionAPI, paths: ConfigPaths): void {
 		if (notice) say(ctx, notice);
 	});
 	pi.on("input", (event, ctx) => onward.input(event, ctx));
+	pi.on("before_agent_start", (event, ctx) => onward.beforeAgentStart(event, ctx));
 	pi.on("session_tree", (_event, ctx) => onward.branch(ctx));
 	pi.on("agent_start", (_event, ctx) => onward.agentStart(ctx));
 	pi.on("message_end", (event, ctx) => onward.messageEnd(event, ctx));

@@ -18,13 +18,23 @@ test("分发示例可直接解析，所有动作存在且按阶段执行", () =>
 	const config = mergeLayers([parseLayer(raw)]);
 	assert.deepEqual(config.problems, []);
 	assert.deepEqual(registry.problems(config), []);
-	assert.equal(matchFailure(config, err("502 Bad Gateway"), 3)?.stage.action.use, "onward.resend");
+	assert.deepEqual(matchFailure(config, err("502 Bad Gateway"), 3)?.stage.action, {
+		use: "pi.message",
+		with: { prompt: "{taskPrompt}" },
+	});
 	assert.equal(matchFailure(config, err("502 Bad Gateway"), 4)?.stage.action.use, "onward.stop");
 });
-test("README 完整 JSON 配置均可解析，公共动作入口和文档随包分发", () => {
+test("README 完整 JSON 配置均可解析且动作已注册，公共动作入口和文档随包分发", () => {
+	const h = harness();
+	const registry = new ActionRegistry();
+	registry.discover(h.pi, builtinActions(h.pi));
 	for (const block of readme.matchAll(/```json\n([\s\S]*?)\n```/g)) {
 		const raw = JSON.parse(block[1]!);
-		if (raw.rules) assert.deepEqual(parseLayer(raw).problems, []);
+		if (raw.rules) {
+			const config = mergeLayers([parseLayer(raw)]);
+			assert.deepEqual(config.problems, []);
+			assert.deepEqual(registry.problems(config), []);
+		}
 	}
 	const manifest = json("package.json");
 	assert.equal(manifest.exports["./actions"], "./src/actions/protocol.ts");

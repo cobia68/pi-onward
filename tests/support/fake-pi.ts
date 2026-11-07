@@ -59,7 +59,7 @@ export function boundaryEvent(message: any, id = "e1", extra: Record<string, unk
 		...extra,
 	};
 }
-export function stage(minFailures = 1, use = "onward.resend", params?: Record<string, unknown>, delay = "0s") {
+export function stage(minFailures = 1, use = "pi.message", params?: Record<string, unknown>, delay = "0s") {
 	return { minFailures, delay, action: { use, ...(params && { with: params }) } };
 }
 export function rule(stages = [stage()], name = "server") {
@@ -287,6 +287,13 @@ export function harness(
 		async command(text: string) {
 			await commands.get("onward").handler(text, ctx);
 			return notes.at(-1)?.[1] ?? "";
+		},
+		async user(text: string, source = "interactive") {
+			await emit("input", { text, source });
+			await emit("before_agent_start", { messageType: "user", prompt: text });
+			const message = { role: "user", content: text, timestamp: ++counter };
+			await emit("message_end", { message });
+			entries.push({ id: `user-${counter}`, type: "message", message });
 		},
 		async boundary(message: any, id = `reply-${++counter}`) {
 			entries.push({ id, type: "message", message });

@@ -5,6 +5,7 @@ import type {
 	AgentBeforeSettleEvent,
 	AgentBeforeSettleEventResult,
 	AgentSettledEvent,
+	BeforeAgentStartEvent,
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
@@ -28,6 +29,7 @@ import { failureText, isFailure, isSuccess } from "../policy/failure.ts";
 import { resolveLimits } from "../policy/policy.ts";
 import { errorText, isRecord } from "../util.ts";
 import { Episode } from "./episode.ts";
+import { INPUT_RECORD, TaskPrompt } from "./task-prompt.ts";
 
 export interface RunState {
 	phase: "idle" | "waiting" | "submitted" | "retrying" | "queued" | "executing" | "stopped";
@@ -64,7 +66,7 @@ export class Recovery {
 	private pending: Invocation | undefined;
 	private disposed = false;
 	private sessionId: string | undefined;
-	private taskPrompt: string | undefined;
+	private readonly taskPrompt = new TaskPrompt();
 	private statusText: string | undefined;
 	private restored: { sessionId: string; chain: RecoveryChain } | undefined;
 	constructor(
@@ -92,17 +94,10 @@ export class Recovery {
 		this.restored = undefined;
 	}
 	input(event: InputEvent, ctx: ExtensionContext): void {
-		if (!this.owns(ctx) || this.disposed) return;
-		if (event.source !== "extension") {
-			this.taskPrompt = event.text;
-			this.reset(ctx);
-		} else {
-			this.taskPrompt ??= event.text;
-			// Automatic prompts continue the same budget; only a real user task starts a fresh episode.
-			this.pending?.controller.abort();
-			this.pending = undefined;
-			this.setState(ctx, { phase: "idle" });
-		}
+		if (this.owns(ctx)) this.taskPrompt.observe(event);
+	}
+	beforeAgentStart(event: BeforeAgentStartEvent, ctx: ExtensionContext): void {
+		if (this.owns(ctx)) this.taskPrompt.begin(event);
 	}
 	agentStart(ctx: ExtensionContext): void {
 		if (!this.owns(ctx)) return;
@@ -123,7 +118,20 @@ export class Recovery {
 		}
 	}
 	messageEnd(event: MessageEndEvent, ctx: ExtensionContext): void {
-		if (this.owns(ctx) && isSuccess(event.message)) this.reset(ctx);
+		if (!this.owns(ctx)) return;
+		if (event.message.role === "user") {
+			const source = this.taskPrompt.consume();
+			// Pi persists the user message after message_end handlers. This metadata follows the same branch,
+			// contains no duplicate prompt text and never enters model context.
+			this.pi.appendEntry(INPUT_RECORD, { timestamp: event.message.timestamp, source: source ?? "unknown" });
+			if (source === "user") this.reset(ctx);
+			else {
+				// A consumed automatic message cancels stale work but preserves the recovery budget.
+				this.pending?.controller.abort();
+				this.pending = undefined;
+				this.setState(ctx, { phase: "idle" });
+			}
+		} else if (isSuccess(event.message)) this.reset(ctx);
 	}
 	async beforeSettle(
 		event: AgentBeforeSettleEvent,
@@ -166,6 +174,7 @@ export class Recovery {
 			this.finish(ctx, { kind: "stopped", message: `达到跨会话接管上限 ${chain.maxHandoffs} 次` }, hit);
 			return;
 		}
+		this.taskPrompt.refresh(ctx.sessionManager.getBranch());
 		const invocation: Invocation = {
 			id: randomUUID(),
 			hit,
@@ -174,7 +183,7 @@ export class Recovery {
 			controller: new AbortController(),
 			config: this.settings.config,
 			sessionId: ctx.sessionManager.getSessionId(),
-			taskPrompt: this.taskPrompt,
+			taskPrompt: this.taskPrompt.value,
 		};
 		this.pending = invocation;
 		const signal = ctx.signal
@@ -212,6 +221,7 @@ export class Recovery {
 	}
 	settled(event: AgentSettledEvent, ctx: ExtensionContext): void {
 		if (!this.owns(ctx)) return;
+		if (!ctx.hasPendingMessages()) this.taskPrompt.clearPending();
 		if (event.aborted) {
 			if (this.pending) this.cancel(ctx, "用户取消了恢复");
 			return;
@@ -277,27 +287,14 @@ export class Recovery {
 	}
 	branch(ctx: ExtensionContext): void {
 		if (!this.owns(ctx)) return;
-		this.taskPrompt = undefined;
-		const entries = ctx.sessionManager.getBranch();
-		for (let index = entries.length - 1; index >= 0; index--) {
-			const entry = entries[index]!;
-			if (entry.type !== "message" || entry.message.role !== "user") continue;
-			const content = entry.message.content;
-			this.taskPrompt =
-				typeof content === "string"
-					? content
-					: content
-							.filter((part) => part.type === "text")
-							.map((part) => part.text)
-							.join("\n");
-			break;
-		}
+		this.taskPrompt.restore(ctx.sessionManager.getBranch());
 		this.reset(ctx);
 	}
 	stop(ctx: ExtensionContext): void {
 		if (this.owns(ctx)) this.reset(ctx);
 	}
 	shutdown(ctx: ExtensionContext): void {
+		this.taskPrompt.clearPending();
 		this.pending?.controller.abort();
 		this.pending = undefined;
 		this.disposed = true;
